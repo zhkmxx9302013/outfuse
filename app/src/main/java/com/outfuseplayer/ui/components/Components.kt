@@ -1,0 +1,469 @@
+﻿package com.outfuseplayer.ui.components
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image as ComposeImage
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import com.outfuseplayer.data.ThumbnailRepository
+import com.outfuseplayer.data.UserSeries
+import com.outfuseplayer.model.LibraryItem
+import com.outfuseplayer.model.LibraryItemType
+import com.outfuseplayer.ui.theme.ElectricBlue
+import com.outfuseplayer.ui.theme.PrimaryAmber
+import com.outfuseplayer.ui.theme.PrimaryOrange
+import com.outfuseplayer.ui.theme.SoftTeal
+import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
+import com.outfuseplayer.ui.theme.Surface2
+import com.outfuseplayer.ui.theme.TextMuted
+
+@Composable
+fun SectionHeader(
+    title: String,
+    action: String? = null,
+    onActionClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        if (action != null && onActionClick != null) {
+            Text(
+                text = action,
+                style = MaterialTheme.typography.labelLarge,
+                color = PrimaryAmber,
+                modifier = Modifier.clickable(onClick = onActionClick)
+            )
+        }
+    }
+}
+
+@Composable
+fun MediaRail(
+    title: String,
+    items: List<LibraryItem>,
+    onItemClick: (LibraryItem) -> Unit,
+    modifier: Modifier = Modifier,
+    posterWidth: Dp = 116.dp,
+    series: List<UserSeries> = emptyList(),
+    action: String? = null,
+    onActionClick: (() -> Unit)? = null
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        SectionHeader(title = title, action = action, onActionClick = onActionClick)
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(items, key = { it.id }) { item ->
+                PosterCard(
+                    item = item,
+                    onClick = { onItemClick(item) },
+                    width = posterWidth,
+                    seriesLabels = series.labelsFor(item)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PosterCard(
+    item: LibraryItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    width: Dp = 120.dp,
+    showProgress: Boolean = true,
+    seriesLabels: List<String> = emptyList()
+) {
+    Column(
+        modifier = modifier
+            .width(width)
+            .clickable(onClick = onClick)
+    ) {
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.68f)
+            ) {
+                if (item.posterUrl == null && item.itemType in setOf(LibraryItemType.VIDEO_FILE, LibraryItemType.IMAGE)) {
+                    FilePreviewThumb(item = item, modifier = Modifier.fillMaxSize())
+                } else {
+                    PosterImage(
+                        url = item.posterUrl,
+                        contentDescription = item.title,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                if (showProgress && item.progress > 0f) {
+                    LinearProgressIndicator(
+                        progress = { item.progress.coerceIn(0f, 1f) },
+                        color = PrimaryOrange,
+                        trackColor = Color.White.copy(alpha = 0.18f),
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .height(3.dp)
+                    )
+                }
+                SeriesBadge(labels = seriesLabels, modifier = Modifier.align(Alignment.TopStart))
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = item.year?.toString() ?: item.durationLabel,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun SeriesBadge(labels: List<String>, modifier: Modifier = Modifier) {
+    val first = labels.firstOrNull() ?: return
+    Surface(
+        modifier = modifier.padding(6.dp),
+        shape = RoundedCornerShape(5.dp),
+        color = PrimaryOrange.copy(alpha = 0.88f)
+    ) {
+        Text(
+            text = if (labels.size > 1) "$first +${labels.size - 1}" else first,
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+        )
+    }
+}
+
+private fun List<UserSeries>.labelsFor(item: LibraryItem): List<String> =
+    filter { item.id in it.itemIds }.map { it.name }
+
+@Composable
+fun FilePreviewThumb(
+    item: LibraryItem,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var thumbnail by remember(item.id, item.streamUrl) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(item.id, item.streamUrl) {
+        thumbnail = ThumbnailRepository.thumbnail(context, item)
+    }
+
+    val accent = if (item.itemType == LibraryItemType.IMAGE) SoftTeal else PrimaryOrange
+    val bitmap = thumbnail
+    if (bitmap != null) {
+        ComposeImage(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = item.title,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+        )
+    } else {
+        Box(
+            modifier = modifier.background(
+                Brush.verticalGradient(
+                    0f to MaterialTheme.colorScheme.surfaceVariant,
+                    1f to MaterialTheme.colorScheme.surface
+                )
+            ),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(12.dp)
+            ) {
+                Surface(shape = CircleShape, color = accent.copy(alpha = 0.16f)) {
+                    Icon(
+                        imageVector = if (item.itemType == LibraryItemType.IMAGE) Icons.Outlined.Image else Icons.Outlined.Movie,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier
+                            .padding(14.dp)
+                            .size(30.dp)
+                    )
+                }
+                Text(
+                    text = item.videoCodec,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PosterImage(
+    url: String?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
+        if (url != null) {
+            AsyncImage(
+                model = url,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.24f)
+                    )
+                )
+        )
+    }
+}
+
+@Composable
+fun BackdropImage(
+    url: String?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
+        if (url != null) {
+            AsyncImage(
+                model = url,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = 0.16f),
+                        0.52f to Color.Black.copy(alpha = 0.42f),
+                        1f to MaterialTheme.colorScheme.background
+                    )
+                )
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0f to MaterialTheme.colorScheme.background.copy(alpha = 0.85f),
+                        0.45f to Color.Transparent,
+                        1f to MaterialTheme.colorScheme.background.copy(alpha = 0.26f)
+                    )
+                )
+        )
+    }
+}
+
+@Composable
+fun TechBadge(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: Color = ElectricBlue
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(4.dp),
+        color = color.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.38f))
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = color,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+fun RatingBadge(rating: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(PrimaryAmber.copy(alpha = 0.18f))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = "IMDb",
+            style = MaterialTheme.typography.labelMedium,
+            color = PrimaryAmber,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = rating,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+    }
+}
+
+@Composable
+fun PrimaryPlayButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .height(48.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(7.dp),
+        color = PrimaryOrange
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.PlayArrow,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = text,
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge
+            )
+        }
+    }
+}
+
+@Composable
+fun GlassPanel(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+        content = content
+    )
+}
+
+@Composable
+fun AvatarImage(
+    imageUrl: String?,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(58.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        if (imageUrl != null) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = label,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text(
+                text = label.take(1),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+    }
+}
+
+

@@ -1,0 +1,68 @@
+﻿package com.outfuseplayer.ui
+
+import com.outfuseplayer.data.smb.SmbEntry
+import com.outfuseplayer.model.LibraryItem
+import com.outfuseplayer.model.LibraryItemType
+import java.util.Locale
+
+enum class MediaSort(val label: String) {
+    NAME("名称"),
+    DATE("日期"),
+    TYPE("类型"),
+    SOURCE("来源")
+}
+
+enum class MediaLayout(val label: String) {
+    LIST("列表"),
+    LARGE("大图"),
+    SMALL("小图")
+}
+
+fun LibraryItem.isImageMedia(): Boolean = itemType == LibraryItemType.IMAGE
+
+fun LibraryItem.isVideoMedia(): Boolean =
+    streamUrl != null && itemType != LibraryItemType.IMAGE && itemType != LibraryItemType.FOLDER
+
+fun LibraryItem.fileExtension(): String =
+    (originalTitle ?: path).substringAfterLast('.', "").uppercase(Locale.US).ifBlank {
+        if (isImageMedia()) "IMAGE" else "VIDEO"
+    }
+
+fun LibraryItem.fileTypeLabel(): String = when {
+    isImageMedia() -> fileExtension()
+    isVideoMedia() -> fileExtension()
+    else -> itemType.name
+}
+
+fun List<LibraryItem>.sortedLibraryFor(sort: MediaSort, ascending: Boolean = true): List<LibraryItem> {
+    val sorted = when (sort) {
+        MediaSort.NAME -> sortedBy { it.title.lowercase(Locale.US) }
+        MediaSort.DATE -> sortedWith(compareBy<LibraryItem> { it.modifiedAt.takeIf { value -> value > 0L } ?: ((it.year ?: 0) * 10_000L) }.thenBy { it.title.lowercase(Locale.US) })
+        MediaSort.TYPE -> sortedWith(compareBy<LibraryItem> { it.fileTypeLabel() }.thenBy { it.title.lowercase(Locale.US) })
+        MediaSort.SOURCE -> sortedWith(compareBy<LibraryItem> { it.sourceName.lowercase(Locale.US) }.thenBy { it.title.lowercase(Locale.US) })
+    }
+    return if (ascending) sorted else sorted.asReversed()
+}
+
+fun List<SmbEntry>.sortedEntriesFor(sort: MediaSort, ascending: Boolean = true): List<SmbEntry> {
+    val sorted = when (sort) {
+        MediaSort.NAME -> sortedWith(entryBaseComparator.thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.DATE -> sortedWith(entryBaseComparator.thenBy { it.modifiedAt }.thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.TYPE -> sortedWith(entryBaseComparator.thenBy { it.mediaTypeName }.thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.SOURCE -> sortedWith(entryBaseComparator.thenBy { it.path.lowercase(Locale.US) })
+    }
+    return if (ascending) sorted else sorted.asReversed()
+}
+
+private val entryBaseComparator = compareByDescending<SmbEntry> { it.isDirectory }
+    .thenByDescending { it.isMedia }
+
+private val SmbEntry.mediaTypeName: String
+    get() = when {
+        isDirectory -> "0-folder"
+        isImage -> "1-image"
+        isVideo -> "2-video"
+        else -> "3-file"
+    }
+
+
