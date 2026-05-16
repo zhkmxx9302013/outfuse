@@ -2,6 +2,8 @@
 
 outfuse 是一个面向 Android 手机与平板的个人媒体库播放器，目标是把本地文件、局域网共享和网络存储中的视频与图片整理成一个安静、快速、易浏览的媒体中心。项目使用 Kotlin、Jetpack Compose 与 AndroidX Media3 构建，适合继续扩展为家庭影音库、NAS 媒体浏览器或移动端相册/视频播放器。
 
+对标同类 Android 媒体播放器，主要面向 NAS 视频与图片查看，不专门做刮削。
+
 ## 功能特性
 
 - 手机与平板自适应界面：底部导航、侧边导航、横屏播放与大屏网格布局。
@@ -13,6 +15,12 @@ outfuse 是一个面向 Android 手机与平板的个人媒体库播放器，目
 - 图片查看：全图显示、滑动浏览、双指缩放。
 - 个性化设置：黑白主题、首页显示项目配置、快进步长、元数据与封面策略、缓存管理、Trakt 链接入口。
 - 格式覆盖：围绕常见视频、图片与局域网媒体场景设计，持续补充 mpg、avi、mov、gif、mkv、flv、wmv 等格式兼容。
+
+![](./asset/Screenshot_2026-05-16-01-36-24-60_c7bd0caed228a7ddaf3e827b59f8bbc2.jpg)
+![](./asset/Screenshot_2026-05-16-01-57-17-07_c7bd0caed228a7ddaf3e827b59f8bbc2.jpg)
+![](./asset/Screenshot_2026-05-16-01-38-13-58_c7bd0caed228a7ddaf3e827b59f8bbc2.jpg)
+![](./asset/Screenshot_2026-05-16-01-39-23-71_c7bd0caed228a7ddaf3e827b59f8bbc2.jpg)
+![](./asset/Screenshot_2026-05-16-01-41-00-04_c7bd0caed228a7ddaf3e827b59f8bbc2.jpg)
 
 ## 技术栈
 
