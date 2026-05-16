@@ -472,94 +472,106 @@ fun PlayerScreen(
         }
         AnimatedVisibility(
             visible = !locked && settingsVisible,
-            modifier = Modifier
-                .align(if (expanded) Alignment.CenterEnd else Alignment.BottomCenter)
-                .safeDrawingPadding()
+            modifier = Modifier.fillMaxSize()
         ) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable {
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable {
+                            settingsVisible = false
+                            playlistVisible = false
+                        }
+                )
+                PlaybackSettingsPanel(
+                    item = item,
+                    expanded = expanded,
+                    fitMode = fitMode,
+                    onFitModeChange = { fitMode = it },
+                    decodeMode = decodeMode,
+                    onDecodeModeChange = { decodeMode = it },
+                    soundBoost = soundBoost,
+                    onSoundBoostChange = {
+                        soundBoost = it
+                        player.volume = it.gain.coerceIn(0f, 4f)
+                    },
+                    ambienceMode = ambienceMode,
+                    onAmbienceModeChange = { ambienceMode = it },
+                    aiEnhancement = aiEnhancement,
+                    onAiEnhancementChange = { aiEnhancement = it },
+                    autoPlayNext = autoPlayNext,
+                    onAutoPlayNextChange = { autoPlayNext = it },
+                    locked = locked,
+                    onLockedChange = {
+                        locked = it
                         settingsVisible = false
                         playlistVisible = false
+                    },
+                    seekStepSeconds = seekStepSeconds,
+                    onSeekStepChange = { seconds ->
+                        seekStepSeconds = seconds
+                        settingsStore.saveSeekStepSeconds(seconds)
+                    },
+                    modifier = if (expanded) {
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .safeDrawingPadding()
+                            .padding(top = 54.dp, end = 14.dp, bottom = 18.dp)
+                            .width(330.dp)
+                            .fillMaxHeight()
+                    } else {
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .safeDrawingPadding()
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
                     }
-            )
-            PlaybackSettingsPanel(
-                item = item,
-                expanded = expanded,
-                fitMode = fitMode,
-                onFitModeChange = { fitMode = it },
-                decodeMode = decodeMode,
-                onDecodeModeChange = { decodeMode = it },
-                soundBoost = soundBoost,
-                onSoundBoostChange = {
-                    soundBoost = it
-                    player.volume = it.gain.coerceIn(0f, 4f)
-                },
-                ambienceMode = ambienceMode,
-                onAmbienceModeChange = { ambienceMode = it },
-                aiEnhancement = aiEnhancement,
-                onAiEnhancementChange = { aiEnhancement = it },
-                autoPlayNext = autoPlayNext,
-                onAutoPlayNextChange = { autoPlayNext = it },
-                locked = locked,
-                onLockedChange = {
-                    locked = it
-                    settingsVisible = false
-                    playlistVisible = false
-                },
-                seekStepSeconds = seekStepSeconds,
-                onSeekStepChange = { seconds ->
-                    seekStepSeconds = seconds
-                    settingsStore.saveSeekStepSeconds(seconds)
-                },
-                modifier = if (expanded) {
-                    Modifier
-                        .width(330.dp)
-                        .fillMaxHeight()
-                        .padding(vertical = 64.dp, horizontal = 16.dp)
-                } else {
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                }
-            )
+                )
+            }
         }
         AnimatedVisibility(
             visible = !locked && playlistVisible,
-            modifier = Modifier
-                .align(if (expanded) Alignment.CenterEnd else Alignment.BottomCenter)
-                .safeDrawingPadding()
+            modifier = Modifier.fillMaxSize()
         ) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable {
-                        settingsVisible = false
-                        playlistVisible = false
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable {
+                            settingsVisible = false
+                            playlistVisible = false
+                        }
+                )
+                PlaylistPanel(
+                    playlist = playbackItems,
+                    currentIndex = currentIndex,
+                    onSelect = { index ->
+                        val selectedItem = playbackItems.getOrNull(index)
+                        val resumeMs = selectedItem?.let { positionStore.get(it.id, it.path) } ?: 0L
+                        player.seekTo(index, resumeMs)
+                        player.play()
+                        currentIndex = index
+                    },
+                    modifier = if (expanded) {
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .safeDrawingPadding()
+                            .padding(top = 54.dp, end = 14.dp, bottom = 18.dp)
+                            .width(360.dp)
+                            .fillMaxHeight()
+                    } else {
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .safeDrawingPadding()
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
                     }
-            )
-            PlaylistPanel(
-                playlist = playbackItems,
-                currentIndex = currentIndex,
-                onSelect = { index ->
-                    val selectedItem = playbackItems.getOrNull(index)
-                    val resumeMs = selectedItem?.let { positionStore.get(it.id, it.path) } ?: 0L
-                    player.seekTo(index, resumeMs)
-                    player.play()
-                    currentIndex = index
-                },
-                modifier = if (expanded) {
-                    Modifier
-                        .width(360.dp)
-                        .fillMaxHeight()
-                        .padding(vertical = 64.dp, horizontal = 16.dp)
-                } else {
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                }
-            )
+                )
+            }
         }
     }
 }
