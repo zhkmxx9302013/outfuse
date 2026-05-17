@@ -271,6 +271,7 @@ fun SourceScreen(
                                 browserPublishSource = false
                                 browserConfig = it
                             },
+                            contentScrollable = true,
                             modifier = Modifier.fillMaxWidth()
                         )
                         SourceTypeRail()
@@ -311,6 +312,7 @@ fun SourceScreen(
                         browserPublishSource = false
                         browserConfig = it
                     },
+                    contentScrollable = false,
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
@@ -447,6 +449,7 @@ private fun AddSmbPanel(
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
     onStartSourceScan: (SmbConfig) -> Unit,
     onOpenBrowser: (SmbConfig) -> Unit,
+    contentScrollable: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -584,6 +587,11 @@ private fun AddSmbPanel(
         SmbCredentialRegistry.register(config)
     }
 
+    val panelScrollState = rememberScrollState()
+    val panelContentModifier = Modifier
+        .padding(16.dp)
+        .then(if (contentScrollable) Modifier.verticalScroll(panelScrollState) else Modifier)
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -593,9 +601,7 @@ private fun AddSmbPanel(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
     ) {
         Column(
-            modifier = Modifier
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+            modifier = panelContentModifier,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(

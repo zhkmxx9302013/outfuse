@@ -22,7 +22,8 @@ data class AppSettings(
     val autoPlayNext: Boolean = true,
     val cacheArtworkOnWifi: Boolean = true,
     val rememberPlayback: Boolean = true,
-    val showDiagnostics: Boolean = true
+    val showDiagnostics: Boolean = true,
+    val firstRunGuideSeen: Boolean = false
 )
 
 class SettingsStore(context: Context) {
@@ -48,7 +49,8 @@ class SettingsStore(context: Context) {
         autoPlayNext = prefs.getBoolean(KEY_AUTO_PLAY_NEXT, true),
         cacheArtworkOnWifi = prefs.getBoolean(KEY_CACHE_ARTWORK_WIFI, true),
         rememberPlayback = prefs.getBoolean(KEY_REMEMBER_PLAYBACK, true),
-        showDiagnostics = prefs.getBoolean(KEY_SHOW_DIAGNOSTICS, true)
+        showDiagnostics = prefs.getBoolean(KEY_SHOW_DIAGNOSTICS, true),
+        firstRunGuideSeen = prefs.getBoolean(KEY_FIRST_RUN_GUIDE_SEEN, false)
     )
 
     fun save(settings: AppSettings) {
@@ -73,6 +75,7 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_CACHE_ARTWORK_WIFI, settings.cacheArtworkOnWifi)
             .putBoolean(KEY_REMEMBER_PLAYBACK, settings.rememberPlayback)
             .putBoolean(KEY_SHOW_DIAGNOSTICS, settings.showDiagnostics)
+            .putBoolean(KEY_FIRST_RUN_GUIDE_SEEN, settings.firstRunGuideSeen)
             .apply()
     }
 
@@ -115,6 +118,7 @@ class SettingsStore(context: Context) {
         private const val KEY_CACHE_ARTWORK_WIFI = "cache_artwork_wifi"
         private const val KEY_REMEMBER_PLAYBACK = "remember_playback"
         private const val KEY_SHOW_DIAGNOSTICS = "show_diagnostics"
+        private const val KEY_FIRST_RUN_GUIDE_SEEN = "first_run_guide_seen"
         private const val KEY_HISTORY_CLEARED_AT = "history_cleared_at"
         private const val KEY_CACHES_CLEARED_AT = "caches_cleared_at"
     }

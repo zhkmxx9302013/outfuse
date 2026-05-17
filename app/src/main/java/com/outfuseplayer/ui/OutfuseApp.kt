@@ -1,17 +1,31 @@
 ﻿package com.outfuseplayer.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -21,7 +35,9 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.NavigationRailItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface as MaterialSurface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,7 +49,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -43,7 +61,6 @@ import com.outfuseplayer.data.AppSettings
 import com.outfuseplayer.data.MediaLibraryStore
 import com.outfuseplayer.data.MediaSourceStore
 import com.outfuseplayer.data.PlaybackPositionStore
-import com.outfuseplayer.data.SampleLibrary
 import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.data.UserSeries
 import com.outfuseplayer.data.UserSeriesStore
@@ -91,6 +108,34 @@ private enum class RootDestination(
     SOURCES("来源", Icons.Outlined.Storage),
     SETTINGS("设置", Icons.Outlined.Settings)
 }
+
+private val BundledDemoItemIds = setOf(
+    "oppenheimer",
+    "dune2",
+    "blade-runner",
+    "last-of-us",
+    "foundation",
+    "batman"
+)
+
+private val BundledDemoSourceIds = setOf("smb", "webdav", "jellyfin", "plex")
+
+private fun LibraryItem.isBundledDemoItem(): Boolean =
+    id in BundledDemoItemIds && streamUrl?.contains("gtv-videos-bucket", ignoreCase = true) == true
+
+private fun MediaSource.isBundledDemoSource(): Boolean =
+    id in BundledDemoSourceIds && credentialsRef?.startsWith("keystore:", ignoreCase = true) == true
+
+private fun internalStorageSource(): MediaSource = MediaSource(
+    id = "local",
+    type = SourceType.LOCAL,
+    name = "内部存储",
+    baseUri = "/storage/emulated/0",
+    credentialsRef = null,
+    enabled = true,
+    health = SourceHealth.ONLINE,
+    detail = "系统内部存储 · 独立显示"
+)
 
 @Composable
 fun OutfuseApp() {
@@ -140,11 +185,11 @@ private fun OutfuseAppContent(
     var metadataState by remember { mutableStateOf<MetadataMatchUiState?>(null) }
     var libraryNotice by remember { mutableStateOf<String?>(null) }
     var scanJob by remember { mutableStateOf<Job?>(null) }
-    val libraryItems = remember { mutableStateListOf<LibraryItem>().apply { addAll(SampleLibrary.items) } }
+    val libraryItems = remember { mutableStateListOf<LibraryItem>() }
     val libraryItemIndex = remember { mutableMapOf<String, Int>() }
     val mediaSources = remember {
         mutableStateListOf<com.outfuseplayer.model.MediaSource>().apply {
-            addAll(SampleLibrary.sources.filter { it.type == SourceType.LOCAL })
+            add(internalStorageSource())
         }
     }
 
@@ -384,7 +429,9 @@ private fun OutfuseAppContent(
     LaunchedEffect(Unit) {
         rebuildLibraryIndex()
         val persistedSources = withContext(Dispatchers.IO) { mediaSourceStore.load() }
-        persistedSources.forEach(::putSource)
+        persistedSources
+            .filterNot { it.isBundledDemoSource() }
+            .forEach(::putSource)
         if (smbConfigStore.hasSaved()) {
             val config = smbConfigStore.loadLast()
             SmbCredentialRegistry.register(config)
@@ -401,8 +448,9 @@ private fun OutfuseAppContent(
             putSource(source)
         }
         val persisted = withContext(Dispatchers.IO) { mediaLibraryStore.load() }
-        if (persisted.isNotEmpty()) {
-            mergeMediaItems(persisted)
+        val userMedia = persisted.filterNot { it.isBundledDemoItem() }
+        if (userMedia.isNotEmpty()) {
+            mergeMediaItems(userMedia)
         }
         rebuildLibraryIndex()
     }
@@ -458,6 +506,12 @@ private fun OutfuseAppContent(
         startShuffle = shuffled
         playerId = item.id
     }
+    fun openRoot(destination: RootDestination) {
+        root = destination.name
+        detailId = null
+        homeBrowseTitle = null
+        homeBrowseIds = emptyList()
+    }
 
     if (expanded) {
         Row(
@@ -467,12 +521,7 @@ private fun OutfuseAppContent(
         ) {
             AppNavigationRail(
                 selectedRoot = selectedRoot,
-                onSelected = {
-                    root = it.name
-                    detailId = null
-                    homeBrowseTitle = null
-                    homeBrowseIds = emptyList()
-                }
+                onSelected = ::openRoot
             )
             Box(modifier = Modifier.fillMaxSize()) {
                 AppContent(
@@ -488,6 +537,7 @@ private fun OutfuseAppContent(
                     homeBrowseIds = homeBrowseIds,
                     appSettings = appSettings,
                     expanded = true,
+                    onOpenSources = { openRoot(RootDestination.SOURCES) },
                     onOpenDetail = onOpenDetail,
                     onBackFromDetail = { detailId = null },
                     onPlay = onPlay,
@@ -538,12 +588,7 @@ private fun OutfuseAppContent(
                 if (detailItem == null) {
                     AppBottomBar(
                         selectedRoot = selectedRoot,
-                        onSelected = {
-                            root = it.name
-                            detailId = null
-                            homeBrowseTitle = null
-                            homeBrowseIds = emptyList()
-                        }
+                        onSelected = ::openRoot
                     )
                 }
             }
@@ -567,6 +612,7 @@ private fun OutfuseAppContent(
                     homeBrowseIds = homeBrowseIds,
                     appSettings = appSettings,
                     expanded = false,
+                    onOpenSources = { openRoot(RootDestination.SOURCES) },
                     onOpenDetail = onOpenDetail,
                     onBackFromDetail = { detailId = null },
                     onPlay = onPlay,
@@ -624,6 +670,7 @@ private fun AppContent(
     homeBrowseIds: List<String>,
     appSettings: AppSettings,
     expanded: Boolean,
+    onOpenSources: () -> Unit,
     onOpenDetail: (LibraryItem) -> Unit,
     onBackFromDetail: () -> Unit,
     onPlay: (LibraryItem) -> Unit,
@@ -677,11 +724,23 @@ private fun AppContent(
                 )
                 return
             }
+            if (libraryItems.isEmpty()) {
+                FirstRunGuideScreen(
+                    expanded = expanded,
+                    showIntro = !appSettings.firstRunGuideSeen,
+                    sourceCount = mediaSources.count { it.type != SourceType.LOCAL },
+                    onAddSource = onOpenSources,
+                    onDismissIntro = {
+                        onSettingsChange(appSettings.copy(firstRunGuideSeen = true))
+                    }
+                )
+                return
+            }
             val playable = libraryItems.filter { it.streamUrl != null && it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
             val featuredItem = playable.firstOrNull { it.id == lastPlayedId }
                 ?: playable.firstOrNull { it.progress > 0f }
                 ?: playable.firstOrNull()
-                ?: SampleLibrary.items.first()
+                ?: libraryItems.first()
             HomeScreen(
             featured = featuredItem,
             allItems = libraryItems,
@@ -732,6 +791,125 @@ private fun AppContent(
             settings = appSettings,
             onSettingsChange = onSettingsChange
         )
+    }
+}
+
+@Composable
+private fun FirstRunGuideScreen(
+    expanded: Boolean,
+    showIntro: Boolean,
+    sourceCount: Int,
+    onAddSource: () -> Unit,
+    onDismissIntro: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .safeDrawingPadding()
+            .padding(horizontal = if (expanded) 48.dp else 20.dp, vertical = if (expanded) 36.dp else 18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        MaterialSurface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 680.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+        ) {
+            Column(
+                modifier = Modifier.padding(if (expanded) 28.dp else 20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                MaterialSurface(
+                    color = PrimaryOrange.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.28f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Storage,
+                        contentDescription = null,
+                        tint = PrimaryOrange,
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .size(32.dp)
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (showIntro) "欢迎使用 outfuse" else "媒体库还是空的",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "先添加 NAS/SMB 来源，或从内部存储浏览视频和图片。扫描完成后，首页会显示最近播放、最近添加、全部媒体和自建系列。",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    GuideStep(
+                        icon = Icons.Outlined.Folder,
+                        title = "1. 添加来源",
+                        description = "进入来源页，保存 SMB / NAS 配置后会在后台扫描媒体。"
+                    )
+                    GuideStep(
+                        icon = Icons.Outlined.Sync,
+                        title = "2. 等待扫描",
+                        description = "扫描进度会显示当前目录、视频数量和图片数量。"
+                    )
+                    GuideStep(
+                        icon = Icons.Outlined.PlayArrow,
+                        title = "3. 浏览与播放",
+                        description = "媒体库会生成缩略图，并支持排序、筛选、随机播放和播放列表。"
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = onAddSource,
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("去添加来源")
+                    }
+                    if (showIntro) {
+                        OutlinedButton(onClick = onDismissIntro) {
+                            Text("知道了")
+                        }
+                    }
+                }
+                if (sourceCount > 0) {
+                    Text(
+                        text = "已添加 $sourceCount 个来源，若媒体库仍为空，可以在来源页点击刷新或重新扫描。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextMuted
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideStep(
+    icon: ImageVector,
+    title: String,
+    description: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(22.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
