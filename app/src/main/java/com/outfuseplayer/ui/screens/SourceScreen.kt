@@ -121,7 +121,8 @@ fun SourceScreen(
     onSourceAdded: (MediaSource) -> Unit,
     onSourceDeleted: (String) -> Unit = {},
     onStartSourceScan: (SmbConfig) -> Unit = {},
-    onMediaDiscovered: (List<LibraryItem>) -> Unit
+    onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaScanCompleted: (String, List<LibraryItem>) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val store = remember { SmbConfigStore(context) }
@@ -266,6 +267,7 @@ fun SourceScreen(
                                 editConfig = null
                             },
                             onMediaDiscovered = onMediaDiscovered,
+                            onMediaScanCompleted = onMediaScanCompleted,
                             onStartSourceScan = onStartSourceScan,
                             onOpenBrowser = {
                                 browserPublishSource = false
@@ -307,6 +309,7 @@ fun SourceScreen(
                         editConfig = null
                     },
                     onMediaDiscovered = onMediaDiscovered,
+                    onMediaScanCompleted = onMediaScanCompleted,
                     onStartSourceScan = onStartSourceScan,
                     onOpenBrowser = {
                         browserPublishSource = false
@@ -447,6 +450,7 @@ private fun AddSmbPanel(
     scanState: SourceScanUiState?,
     onSourceAdded: (MediaSource) -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaScanCompleted: (String, List<LibraryItem>) -> Unit,
     onStartSourceScan: (SmbConfig) -> Unit,
     onOpenBrowser: (SmbConfig) -> Unit,
     contentScrollable: Boolean = true,
@@ -521,9 +525,7 @@ private fun AddSmbPanel(
             busy = true
             status = "正在扫描本机视频和图片"
             val items = localRepository.scan()
-            if (items.isNotEmpty()) {
-                onMediaDiscovered(items)
-            }
+            onMediaScanCompleted(LocalMediaRepository.LOCAL_SOURCE_ID, items)
             publishLocalSource(items)
             status = if (items.isEmpty()) "未发现本机媒体，或尚未授予媒体读取权限。" else "已加入 ${items.size} 个本机媒体"
             busy = false
@@ -558,7 +560,7 @@ private fun AddSmbPanel(
                 busy = true
                 status = "正在递归扫描本地文件夹"
                 val items = localRepository.scanTree(uri)
-                if (items.isNotEmpty()) onMediaDiscovered(items)
+                onMediaScanCompleted(LocalMediaRepository.LOCAL_TREE_SOURCE_ID, items)
                 publishLocalSource(items)
                 status = if (items.isEmpty()) "该文件夹及子文件夹中未发现支持的图片或视频。" else "已加入 ${items.size} 个本地文件夹媒体"
                 busy = false

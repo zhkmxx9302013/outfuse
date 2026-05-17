@@ -126,6 +126,20 @@ private fun LibraryItem.isBundledDemoItem(): Boolean =
 private fun MediaSource.isBundledDemoSource(): Boolean =
     id in BundledDemoSourceIds && credentialsRef?.startsWith("keystore:", ignoreCase = true) == true
 
+private data class LibraryDelta(
+    val added: Int = 0,
+    val updated: Int = 0,
+    val removed: Int = 0
+) {
+    val hasChanges: Boolean get() = added > 0 || updated > 0 || removed > 0
+
+    operator fun plus(other: LibraryDelta): LibraryDelta = LibraryDelta(
+        added = added + other.added,
+        updated = updated + other.updated,
+        removed = removed + other.removed
+    )
+}
+
 private fun internalStorageSource(): MediaSource = MediaSource(
     id = "local",
     type = SourceType.LOCAL,
@@ -202,19 +216,90 @@ private fun OutfuseAppContent(
         }
     }
 
-    fun mergeMediaItems(discovered: List<LibraryItem>) {
-        if (discovered.isEmpty()) return
+    fun LibraryItem.withPreservedUserState(existing: LibraryItem): LibraryItem = copy(
+        progress = existing.progress,
+        posterUrl = posterUrl ?: existing.posterUrl,
+        backdropUrl = backdropUrl ?: existing.backdropUrl,
+        rating = rating.takeUnless { it == "-" } ?: existing.rating,
+        overview = overview.ifBlank { existing.overview },
+        genres = genres.ifEmpty { existing.genres }
+    )
+
+    fun mergeMediaItems(discovered: List<LibraryItem>): LibraryDelta {
+        if (discovered.isEmpty()) return LibraryDelta()
         if (libraryItemIndex.size != libraryItems.size) rebuildLibraryIndex()
+        var added = 0
+        var updated = 0
         discovered.forEach { item ->
             val key = libraryKey(item)
             val existingIndex = libraryItemIndex[key]
             if (existingIndex != null && existingIndex in 0 until libraryItems.size) {
-                libraryItems[existingIndex] = item
+                val existing = libraryItems[existingIndex]
+                val next = item.withPreservedUserState(existing)
+                if (next != existing) {
+                    libraryItems[existingIndex] = next
+                    updated++
+                }
             } else {
                 libraryItemIndex[key] = libraryItems.size
                 libraryItems += item
+                added++
             }
         }
+        return LibraryDelta(added = added, updated = updated)
+    }
+
+    fun LibraryItem.isInsideScanScope(config: SmbConfig): Boolean {
+        if (sourceId != config.sourceId) return false
+        val root = config.path.toRemotePath()
+        if (root.isBlank()) return true
+        val normalizedPath = path.toRemotePath()
+        return normalizedPath == root || normalizedPath.startsWith("$root\\")
+    }
+
+    fun removeMissingItemsFromScanScope(config: SmbConfig, scannedKeys: Set<String>): LibraryDelta {
+        if (libraryItems.none { it.isInsideScanScope(config) }) return LibraryDelta()
+        val before = libraryItems.size
+        libraryItems.removeAll { item ->
+            item.isInsideScanScope(config) && libraryKey(item) !in scannedKeys
+        }
+        val removed = before - libraryItems.size
+        if (removed > 0) rebuildLibraryIndex()
+        return LibraryDelta(removed = removed)
+    }
+
+    fun removeMissingItemsFromSource(sourceId: String, scannedKeys: Set<String>): LibraryDelta {
+        if (libraryItems.none { it.sourceId == sourceId }) return LibraryDelta()
+        val before = libraryItems.size
+        libraryItems.removeAll { item ->
+            item.sourceId == sourceId && libraryKey(item) !in scannedKeys
+        }
+        val removed = before - libraryItems.size
+        if (removed > 0) rebuildLibraryIndex()
+        return LibraryDelta(removed = removed)
+    }
+
+    fun LibraryDelta.toScanChangeText(): String =
+        if (!hasChanges) {
+            "无变化"
+        } else {
+            listOfNotNull(
+                added.takeIf { it > 0 }?.let { "新增 $it" },
+                updated.takeIf { it > 0 }?.let { "更新 $it" },
+                removed.takeIf { it > 0 }?.let { "删除 $it" }
+            ).joinToString(" · ")
+        }
+
+    fun reconcileCompletedScan(config: SmbConfig, scannedKeys: Set<String>, scannedDelta: LibraryDelta): LibraryDelta {
+        val removeDelta = removeMissingItemsFromScanScope(config, scannedKeys)
+        return scannedDelta + removeDelta
+    }
+
+    fun reconcileCompletedSourceScan(sourceId: String, scannedItems: List<LibraryItem>): LibraryDelta {
+        val scannedKeys = scannedItems.mapTo(LinkedHashSet<String>()) { libraryKey(it) }
+        val mergeDelta = mergeMediaItems(scannedItems)
+        val removeDelta = removeMissingItemsFromSource(sourceId, scannedKeys)
+        return mergeDelta + removeDelta
     }
 
     fun persistLibrarySnapshot() {
@@ -284,6 +369,8 @@ private fun OutfuseAppContent(
             message = "后台扫描准备中"
         )
         scanJob = scope.launch {
+            val scannedKeys = LinkedHashSet<String>()
+            var scannedDelta = LibraryDelta()
             val result = smbRepository.scanMediaIncremental(
                 config = config,
                 batchSize = 160,
@@ -305,13 +392,19 @@ private fun OutfuseAppContent(
                 },
                 onBatch = { batch ->
                     withContext(Dispatchers.Main) {
-                        mergeMediaItems(batch)
+                        batch.forEach { scannedKeys += libraryKey(it) }
+                        scannedDelta += mergeMediaItems(batch)
                     }
                 }
             )
             withContext(Dispatchers.Main) {
+                val finalDelta = if (result.success) {
+                    reconcileCompletedScan(config, scannedKeys, scannedDelta)
+                } else {
+                    scannedDelta
+                }
                 val finalDetail = if (result.success) {
-                    result.message
+                    "${result.message} · ${finalDelta.toScanChangeText()}"
                 } else {
                     "扫描失败：${result.message}"
                 }
@@ -327,6 +420,7 @@ private fun OutfuseAppContent(
                     pendingDirectories = 0,
                     message = finalDetail
                 )
+                libraryNotice = finalDetail
                 persistSourceSnapshot()
                 persistLibrarySnapshot()
             }
@@ -574,6 +668,11 @@ private fun OutfuseAppContent(
                     onMediaDiscovered = { discovered ->
                         mergeMediaItems(discovered)
                         persistLibrarySnapshot()
+                    },
+                    onMediaScanCompleted = { sourceId, scannedItems ->
+                        val delta = reconcileCompletedSourceScan(sourceId, scannedItems)
+                        libraryNotice = "媒体库增量更新完成：${delta.toScanChangeText()}"
+                        persistLibrarySnapshot()
                     }
                 )
             }
@@ -649,6 +748,11 @@ private fun OutfuseAppContent(
                     onMediaDiscovered = { discovered ->
                         mergeMediaItems(discovered)
                         persistLibrarySnapshot()
+                    },
+                    onMediaScanCompleted = { sourceId, scannedItems ->
+                        val delta = reconcileCompletedSourceScan(sourceId, scannedItems)
+                        libraryNotice = "媒体库增量更新完成：${delta.toScanChangeText()}"
+                        persistLibrarySnapshot()
                     }
                 )
             }
@@ -686,7 +790,8 @@ private fun AppContent(
     onRefreshLibrary: () -> Unit,
     onRefreshMetadata: () -> Unit,
     onFileAction: (FileActionRequest) -> Unit,
-    onMediaDiscovered: (List<LibraryItem>) -> Unit
+    onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaScanCompleted: (String, List<LibraryItem>) -> Unit
 ) {
     if (detailItem != null) {
         DetailScreen(
@@ -783,7 +888,8 @@ private fun AppContent(
             onSourceAdded = onSourceAdded,
             onSourceDeleted = onSourceDeleted,
             onStartSourceScan = onStartSourceScan,
-            onMediaDiscovered = onMediaDiscovered
+            onMediaDiscovered = onMediaDiscovered,
+            onMediaScanCompleted = onMediaScanCompleted
         )
 
         RootDestination.SETTINGS -> SettingsScreen(
