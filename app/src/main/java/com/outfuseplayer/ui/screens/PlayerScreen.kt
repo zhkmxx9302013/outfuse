@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -450,6 +451,7 @@ fun PlayerScreen(
                     onToggleFit = {
                         fitMode = if (fitMode == PlayerFitMode.CROP) PlayerFitMode.FIT else PlayerFitMode.CROP
                     },
+                    expanded = expanded,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
                 if (playlistVisible && !expanded) {
@@ -752,21 +754,32 @@ private fun PlayerBottomControls(
     speed: Float,
     onCycleSpeed: () -> Unit,
     onToggleFit: () -> Unit,
+    expanded: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val compact = !expanded
     val progress = if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f
+    val timeStyle = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium
+    val controlSpacing = if (compact) 6.dp else 8.dp
     Column(
         modifier = modifier
             .fillMaxWidth()
             .safeDrawingPadding()
-            .padding(horizontal = 18.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(horizontal = if (compact) 12.dp else 18.dp, vertical = if (compact) 8.dp else 10.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 4.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp)
         ) {
-            Text(formatTime(positionMs), style = MaterialTheme.typography.labelMedium, color = Color.White)
+            Text(
+                text = formatTime(positionMs),
+                style = timeStyle,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier.widthIn(min = 38.dp, max = 58.dp)
+            )
             Slider(
                 value = progress.coerceIn(0f, 1f),
                 onValueChange = { value ->
@@ -779,14 +792,67 @@ private fun PlayerBottomControls(
                     inactiveTrackColor = Color.White.copy(alpha = 0.18f)
                 )
             )
-            Text(formatTime(durationMs), style = MaterialTheme.typography.labelMedium, color = Color.White)
+            Text(
+                text = formatTime(durationMs),
+                style = timeStyle,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier.widthIn(min = 38.dp, max = 58.dp)
+            )
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (compact) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
+                    PlayerIconButton(Icons.Outlined.SkipPrevious, "上一项", compact = true) {
+                        player.seekToPreviousMediaItem()
+                    }
+                    PlayerIconButton(Icons.Outlined.Replay10, "后退 10 秒", compact = true) {
+                        player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0L))
+                    }
+                    PlayerIconButton(
+                        imageVector = if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                        contentDescription = if (isPlaying) "暂停" else "播放",
+                        prominent = true,
+                        compact = true,
+                        onClick = onTogglePlay
+                    )
+                    PlayerIconButton(Icons.Outlined.Forward10, "前进 10 秒", compact = true) {
+                        player.seekTo(player.currentPosition + 10_000)
+                    }
+                    PlayerIconButton(Icons.Outlined.SkipNext, "下一项", compact = true) {
+                        player.seekToNextMediaItem()
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
+                    PlayerIconButton(
+                        imageVector = Icons.Outlined.Shuffle,
+                        contentDescription = "随机播放",
+                        prominent = shuffleEnabled,
+                        compact = true,
+                        onClick = onToggleShuffle
+                    )
+                    SpeedPill("${speed}x", compact = true, onClick = onCycleSpeed)
+                    PlayerIconButton(Icons.Outlined.Fullscreen, "全屏", compact = true) { onToggleFit() }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
                 PlayerIconButton(Icons.Outlined.SkipPrevious, "上一项") {
                     player.seekToPreviousMediaItem()
                 }
@@ -805,16 +871,17 @@ private fun PlayerBottomControls(
                 PlayerIconButton(Icons.Outlined.SkipNext, "下一项") {
                     player.seekToNextMediaItem()
                 }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                PlayerIconButton(
-                    imageVector = Icons.Outlined.Shuffle,
-                    contentDescription = "随机播放",
-                    prominent = shuffleEnabled,
-                    onClick = onToggleShuffle
-                )
-                SpeedPill("${speed}x", onClick = onCycleSpeed)
-                PlayerIconButton(Icons.Outlined.Fullscreen, "全屏") { onToggleFit() }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
+                    PlayerIconButton(
+                        imageVector = Icons.Outlined.Shuffle,
+                        contentDescription = "随机播放",
+                        prominent = shuffleEnabled,
+                        onClick = onToggleShuffle
+                    )
+                    SpeedPill("${speed}x", onClick = onCycleSpeed)
+                    PlayerIconButton(Icons.Outlined.Fullscreen, "全屏") { onToggleFit() }
+                }
             }
         }
     }
@@ -825,8 +892,15 @@ private fun PlayerIconButton(
     imageVector: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
     prominent: Boolean = false,
+    compact: Boolean = false,
     onClick: () -> Unit
 ) {
+    val buttonSize = when {
+        prominent && compact -> 44.dp
+        prominent -> 50.dp
+        compact -> 36.dp
+        else -> 42.dp
+    }
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = if (prominent) Color.White else Color.White.copy(alpha = 0.08f),
@@ -834,7 +908,7 @@ private fun PlayerIconButton(
     ) {
         IconButton(
             onClick = onClick,
-            modifier = Modifier.size(if (prominent) 50.dp else 42.dp)
+            modifier = Modifier.size(buttonSize)
         ) {
             Icon(
                 imageVector = imageVector,
@@ -846,7 +920,7 @@ private fun PlayerIconButton(
 }
 
 @Composable
-private fun SpeedPill(text: String, onClick: () -> Unit) {
+private fun SpeedPill(text: String, compact: Boolean = false, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
@@ -855,9 +929,11 @@ private fun SpeedPill(text: String, onClick: () -> Unit) {
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelLarge,
+            style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
             color = Color.White,
-            modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier.padding(horizontal = if (compact) 10.dp else 13.dp, vertical = if (compact) 8.dp else 10.dp)
         )
     }
 }
