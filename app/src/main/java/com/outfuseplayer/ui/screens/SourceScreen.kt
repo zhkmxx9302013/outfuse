@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -250,7 +251,9 @@ fun SourceScreen(
                 }
                 if (addVisible) {
                     Column(
-                        modifier = Modifier.width(470.dp),
+                        modifier = Modifier
+                            .width(470.dp)
+                            .fillMaxHeight(),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         AddSmbPanel(
@@ -274,7 +277,9 @@ fun SourceScreen(
                                 browserConfig = it
                             },
                             contentScrollable = true,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
                         )
                         SourceTypeRail()
                     }
@@ -596,8 +601,7 @@ private fun AddSmbPanel(
 
     Surface(
         modifier = modifier
-            .fillMaxWidth()
-            .imePadding(),
+            .fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         shape = RoundedCornerShape(8.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))

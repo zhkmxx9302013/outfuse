@@ -6,6 +6,8 @@ import android.util.JsonToken
 import android.util.JsonWriter
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 class MediaLibraryStore(context: Context) {
@@ -13,6 +15,17 @@ class MediaLibraryStore(context: Context) {
 
     fun load(): List<LibraryItem> {
         if (!libraryFile.exists()) return emptyList()
+        val text = runCatching { libraryFile.readText(Charsets.UTF_8) }.getOrNull().orEmpty()
+        if (text.isNotBlank()) {
+            runCatching {
+                val array = JSONArray(text)
+                buildList {
+                    for (index in 0 until array.length()) {
+                        array.optJSONObject(index)?.toLibraryItemOrNull()?.let(::add)
+                    }
+                }
+            }.getOrNull()?.let { return it }
+        }
         return runCatching {
             JsonReader(libraryFile.reader()).use { reader ->
                 buildList {
@@ -157,6 +170,41 @@ class MediaLibraryStore(context: Context) {
         }
     }.getOrNull()
 
+    private fun JSONObject.toLibraryItemOrNull(): LibraryItem? = runCatching {
+        val id = optString("id").ifBlank { return@runCatching null }
+        val sourceId = optString("sourceId").ifBlank { return@runCatching null }
+        val path = optString("path").ifBlank { return@runCatching null }
+        val itemType = runCatching {
+            LibraryItemType.valueOf(optString("itemType", LibraryItemType.VIDEO_FILE.name))
+        }.getOrDefault(LibraryItemType.VIDEO_FILE)
+
+        LibraryItem(
+            id = id,
+            sourceId = sourceId,
+            path = path,
+            modifiedAt = optLong("modifiedAt", 0L),
+            itemType = itemType,
+            title = optString("title").ifBlank { path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path } },
+            originalTitle = nullableString("originalTitle"),
+            year = nullableInt("year"),
+            durationLabel = optString("durationLabel").ifBlank { if (itemType == LibraryItemType.IMAGE) "图片" else "视频" },
+            posterUrl = nullableString("posterUrl"),
+            backdropUrl = nullableString("backdropUrl"),
+            overview = optString("overview"),
+            rating = optString("rating").ifBlank { "-" },
+            progress = optDouble("progress", 0.0).toFloat(),
+            seasonNumber = nullableInt("seasonNumber"),
+            episodeNumber = nullableInt("episodeNumber"),
+            resolution = optString("resolution").ifBlank { if (itemType == LibraryItemType.IMAGE) "图片" else "视频" },
+            videoCodec = optString("videoCodec").ifBlank { if (itemType == LibraryItemType.IMAGE) "IMAGE" else "VIDEO" },
+            audioCodec = optString("audioCodec").ifBlank { if (itemType == LibraryItemType.IMAGE) "图片" else "原始音轨" },
+            hdr = nullableString("hdr"),
+            sourceName = optString("sourceName").ifBlank { "媒体库" },
+            streamUrl = nullableString("streamUrl"),
+            genres = stringArray("genres")
+        )
+    }.getOrNull()
+
     private fun JsonWriter.nullableValue(value: String?) {
         if (value == null) nullValue() else value(value)
     }
@@ -214,6 +262,21 @@ class MediaLibraryStore(context: Context) {
             beginArray()
             while (hasNext()) add(nextStringOrEmpty())
             endArray()
+        }
+    }
+
+    private fun JSONObject.nullableString(key: String): String? =
+        if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+    private fun JSONObject.nullableInt(key: String): Int? =
+        if (!has(key) || isNull(key)) null else optInt(key)
+
+    private fun JSONObject.stringArray(key: String): List<String> {
+        val array = optJSONArray(key) ?: return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                array.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+            }
         }
     }
 }

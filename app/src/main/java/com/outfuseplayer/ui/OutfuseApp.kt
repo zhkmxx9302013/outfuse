@@ -70,6 +70,7 @@ import com.outfuseplayer.data.smb.SmbCredentialRegistry
 import com.outfuseplayer.data.smb.SmbRepository
 import com.outfuseplayer.data.smb.SmbScanProgress
 import com.outfuseplayer.data.smb.toRemotePath
+import com.outfuseplayer.data.smb.toSmbUri
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.SourceHealth
@@ -522,12 +523,14 @@ private fun OutfuseAppContent(
 
     LaunchedEffect(Unit) {
         rebuildLibraryIndex()
+        var savedSmbConfig: SmbConfig? = null
         val persistedSources = withContext(Dispatchers.IO) { mediaSourceStore.load() }
         persistedSources
             .filterNot { it.isBundledDemoSource() }
             .forEach(::putSource)
         if (smbConfigStore.hasSaved()) {
             val config = smbConfigStore.loadLast()
+            savedSmbConfig = config
             SmbCredentialRegistry.register(config)
             val source = MediaSource(
                 id = config.sourceId,
@@ -542,9 +545,27 @@ private fun OutfuseAppContent(
             putSource(source)
         }
         val persisted = withContext(Dispatchers.IO) { mediaLibraryStore.load() }
-        val userMedia = persisted.filterNot { it.isBundledDemoItem() }
+        val userMedia = persisted
+            .filterNot { it.isBundledDemoItem() }
+            .map { item ->
+                val config = savedSmbConfig
+                if (item.streamUrl == null && config != null && item.sourceId == config.sourceId) {
+                    item.copy(streamUrl = config.toSmbUri(item.path), sourceName = item.sourceName.ifBlank { config.name })
+                } else {
+                    item
+                }
+            }
         if (userMedia.isNotEmpty()) {
             mergeMediaItems(userMedia)
+            if (userMedia.any { it.streamUrl != persisted.firstOrNull { old -> old.id == it.id }?.streamUrl }) {
+                persistLibrarySnapshot()
+            }
+        } else {
+            val config = savedSmbConfig
+            if (config != null && mediaSources.any { it.id == config.sourceId }) {
+                libraryNotice = "媒体库为空，正在根据已保存来源恢复扫描。"
+                startBackgroundScan(config)
+            }
         }
         rebuildLibraryIndex()
     }
