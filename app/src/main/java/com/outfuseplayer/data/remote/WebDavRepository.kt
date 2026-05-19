@@ -11,6 +11,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.ProtocolException
 import java.net.URL
@@ -107,6 +108,94 @@ class WebDavRepository {
             )
         }
 
+    suspend fun exists(config: RemoteSourceConfig, path: String): RemoteActionResult<Boolean> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val checked = config.withValidatedBaseUrl()
+                val connection = URL(checked.resolveWebUrl(path)).openConfiguredConnection(
+                    method = "HEAD",
+                    headers = checked.authHeaders()
+                )
+                val code = connection.responseCode
+                when (code) {
+                    in 200..399 -> RemoteActionResult<Boolean>(true, "文件存在", true)
+                    404, 410 -> RemoteActionResult<Boolean>(true, "文件不存在", false)
+                    else -> RemoteActionResult<Boolean>(false, "HTTP $code", null)
+                }
+            }.getOrElse { error ->
+                val message = error.toRemoteFriendlyMessage()
+                if (message.contains("404") || message.contains("not found", ignoreCase = true)) {
+                    RemoteActionResult<Boolean>(true, "文件不存在", false)
+                } else {
+                    RemoteActionResult<Boolean>(false, message, null)
+                }
+            }
+        }
+
+    suspend fun delete(config: RemoteSourceConfig, path: String): RemoteActionResult<Unit> =
+        webDavMutation(config, "DELETE", path, successCodes = setOf(200, 202, 204)) {
+            RemoteActionResult(true, "已删除 $path")
+        }
+
+    suspend fun rename(config: RemoteSourceConfig, path: String, newName: String): RemoteActionResult<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                require(newName.isNotBlank()) { "请输入新名称" }
+                val checked = config.withValidatedBaseUrl()
+                val targetPath = path.parentWebDavPath()
+                    .let { parent -> if (parent.isBlank()) newName.trim() else "$parent/${newName.trim()}" }
+                val connection = URL(checked.resolveWebUrl(path)).openConnection() as HttpURLConnection
+                connection.setRequestMethodCompat("MOVE")
+                connection.applyHeaders(checked.authHeaders())
+                connection.setRequestProperty("Destination", checked.resolveWebUrl(targetPath))
+                connection.setRequestProperty("Overwrite", "F")
+                connection.ensureSuccessful(setOf(200, 201, 204))
+                targetPath
+            }.fold(
+                onSuccess = { RemoteActionResult(true, "已重命名", it) },
+                onFailure = { RemoteActionResult(false, it.toRemoteFriendlyMessage()) }
+            )
+        }
+
+    suspend fun move(config: RemoteSourceConfig, path: String, targetDirectory: String): RemoteActionResult<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                require(targetDirectory.isNotBlank()) { "请输入目标文件夹路径" }
+                val checked = config.withValidatedBaseUrl()
+                val fileName = path.trim('/').substringAfterLast('/')
+                val targetPath = "${targetDirectory.trim('/')}/$fileName".trim('/')
+                val connection = URL(checked.resolveWebUrl(path)).openConnection() as HttpURLConnection
+                connection.setRequestMethodCompat("MOVE")
+                connection.applyHeaders(checked.authHeaders())
+                connection.setRequestProperty("Destination", checked.resolveWebUrl(targetPath))
+                connection.setRequestProperty("Overwrite", "F")
+                connection.ensureSuccessful(setOf(200, 201, 204))
+                targetPath
+            }.fold(
+                onSuccess = { RemoteActionResult(true, "已移动到 $it", it) },
+                onFailure = { RemoteActionResult(false, it.toRemoteFriendlyMessage()) }
+            )
+        }
+
+    suspend fun download(config: RemoteSourceConfig, path: String, targetDirectory: File): RemoteActionResult<File> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val checked = config.withValidatedBaseUrl()
+                targetDirectory.mkdirs()
+                val fileName = path.trim('/').substringAfterLast('/').ifBlank { "webdav-download" }
+                val target = File(targetDirectory, fileName)
+                val connection = URL(checked.resolveWebUrl(path)).openConfiguredConnection(headers = checked.authHeaders())
+                connection.ensureSuccessful(setOf(200, 206))
+                connection.inputStream.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                target
+            }.fold(
+                onSuccess = { RemoteActionResult(true, "已下载到 ${it.absolutePath}", it) },
+                onFailure = { RemoteActionResult(false, it.toRemoteFriendlyMessage()) }
+            )
+        }
+
     fun streamHeaders(config: RemoteSourceConfig): Map<String, String> = config.authHeaders()
 
     fun streamUrl(config: RemoteSourceConfig, path: String): String = config.withValidatedBaseUrl().resolveWebUrl(path)
@@ -161,6 +250,31 @@ class WebDavRepository {
             val methodField = HttpURLConnection::class.java.getDeclaredField("method")
             methodField.isAccessible = true
             methodField.set(this, methodName)
+        }
+    }
+
+    private suspend fun <T> webDavMutation(
+        config: RemoteSourceConfig,
+        method: String,
+        path: String,
+        successCodes: Set<Int>,
+        buildResult: () -> RemoteActionResult<T>
+    ): RemoteActionResult<T> = withContext(Dispatchers.IO) {
+        runCatching {
+            val checked = config.withValidatedBaseUrl()
+            val connection = URL(checked.resolveWebUrl(path)).openConnection() as HttpURLConnection
+            connection.setRequestMethodCompat(method)
+            connection.applyHeaders(checked.authHeaders())
+            connection.ensureSuccessful(successCodes)
+            buildResult()
+        }.getOrElse { RemoteActionResult(false, it.toRemoteFriendlyMessage()) }
+    }
+
+    private fun HttpURLConnection.ensureSuccessful(successCodes: Set<Int>) {
+        val code = responseCode
+        if (code !in successCodes) {
+            val errorText = errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            error("HTTP $code $errorText")
         }
     }
 
@@ -264,3 +378,6 @@ class WebDavRepository {
             mimeType?.startsWith("image/", ignoreCase = true) == true ||
             mimeType?.startsWith("video/", ignoreCase = true) == true
 }
+
+private fun String.parentWebDavPath(): String =
+    trim('/').substringBeforeLast("/", missingDelimiterValue = "")

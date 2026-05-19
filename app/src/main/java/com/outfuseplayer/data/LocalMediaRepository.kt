@@ -23,7 +23,11 @@ class LocalMediaRepository(context: Context) {
         (videos + images).sortedByDescending { it.modifiedAt }
     }
 
-    suspend fun scanTree(treeUri: Uri): List<LibraryItem> = withContext(Dispatchers.IO) {
+    suspend fun scanTree(
+        treeUri: Uri,
+        sourceId: String = treeSourceId(treeUri),
+        sourceName: String = treeSourceName(treeUri)
+    ): List<LibraryItem> = withContext(Dispatchers.IO) {
         val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
         val pending = ArrayDeque<String>()
         val items = mutableListOf<LibraryItem>()
@@ -64,8 +68,8 @@ class LocalMediaRepository(context: Context) {
                             val extension = name.substringAfterLast('.', "").uppercase(Locale.US)
                             val isImage = name.isImageFileName()
                             items += LibraryItem(
-                                id = "tree-${documentUri}".hashCode().absoluteValue.toString(),
-                                sourceId = LOCAL_TREE_SOURCE_ID,
+                                id = "$sourceId-${documentUri}".hashCode().absoluteValue.toString(),
+                                sourceId = sourceId,
                                 path = documentId,
                                 modifiedAt = modifiedAt,
                                 itemType = if (isImage) LibraryItemType.IMAGE else LibraryItemType.VIDEO_FILE,
@@ -82,7 +86,7 @@ class LocalMediaRepository(context: Context) {
                                 videoCodec = extension.ifBlank { if (isImage) "IMAGE" else "VIDEO" },
                                 audioCodec = if (isImage) "图片" else "原始音轨",
                                 hdr = null,
-                                sourceName = LOCAL_TREE_SOURCE_NAME,
+                                sourceName = sourceName,
                                 streamUrl = documentUri.toString(),
                                 genres = listOf("本地文件夹", if (isImage) "图片" else "视频", extension)
                             )
@@ -219,6 +223,15 @@ class LocalMediaRepository(context: Context) {
         const val LOCAL_SOURCE_NAME = "本机媒体"
         const val LOCAL_TREE_SOURCE_ID = "local-document-tree"
         const val LOCAL_TREE_SOURCE_NAME = "本地文件夹"
+
+        fun treeSourceId(treeUri: Uri): String =
+            "$LOCAL_TREE_SOURCE_ID-${treeUri.toString().hashCode().absoluteValue}"
+
+        fun treeSourceName(treeUri: Uri): String {
+            val treeId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull().orEmpty()
+            val name = treeId.substringAfter(':', treeId).substringAfterLast('/').substringAfterLast('\\')
+            return name.ifBlank { LOCAL_TREE_SOURCE_NAME }
+        }
     }
 }
 

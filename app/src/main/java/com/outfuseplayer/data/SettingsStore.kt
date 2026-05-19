@@ -9,6 +9,15 @@ data class AppSettings(
     val metadataLanguage: String = "简体中文",
     val scanInterval: String = "手动",
     val scrapeStrategy: String = "文件名优先",
+    val scraperSourceOrder: String = "本地优先",
+    val scraperLocalNfo: Boolean = true,
+    val scraperLocalArtwork: Boolean = true,
+    val scraperServerMetadata: Boolean = true,
+    val scraperOnlineTmdb: Boolean = false,
+    val scraperOnlineTvdb: Boolean = false,
+    val scraperOnlineBangumi: Boolean = false,
+    val scraperWriteBack: Boolean = false,
+    val quickSyncDeletedFiles: Boolean = true,
     val metadataCacheLimit: String = "500 MB",
     val artworkCacheLimit: String = "200 MB",
     val autoDownloadMetadata: Boolean = true,
@@ -36,6 +45,15 @@ class SettingsStore(context: Context) {
         metadataLanguage = prefs.getString(KEY_METADATA_LANGUAGE, "简体中文") ?: "简体中文",
         scanInterval = prefs.getString(KEY_SCAN_INTERVAL, "手动") ?: "手动",
         scrapeStrategy = prefs.getString(KEY_SCRAPE_STRATEGY, "文件名优先") ?: "文件名优先",
+        scraperSourceOrder = prefs.getString(KEY_SCRAPER_SOURCE_ORDER, "本地优先") ?: "本地优先",
+        scraperLocalNfo = prefs.getBoolean(KEY_SCRAPER_LOCAL_NFO, true),
+        scraperLocalArtwork = prefs.getBoolean(KEY_SCRAPER_LOCAL_ARTWORK, true),
+        scraperServerMetadata = prefs.getBoolean(KEY_SCRAPER_SERVER_METADATA, true),
+        scraperOnlineTmdb = prefs.getBoolean(KEY_SCRAPER_ONLINE_TMDB, false),
+        scraperOnlineTvdb = prefs.getBoolean(KEY_SCRAPER_ONLINE_TVDB, false),
+        scraperOnlineBangumi = prefs.getBoolean(KEY_SCRAPER_ONLINE_BANGUMI, false),
+        scraperWriteBack = prefs.getBoolean(KEY_SCRAPER_WRITE_BACK, false),
+        quickSyncDeletedFiles = prefs.getBoolean(KEY_QUICK_SYNC_DELETED_FILES, true),
         metadataCacheLimit = prefs.getString(KEY_METADATA_CACHE_LIMIT, "500 MB") ?: "500 MB",
         artworkCacheLimit = prefs.getString(KEY_ARTWORK_CACHE_LIMIT, "200 MB") ?: "200 MB",
         autoDownloadMetadata = prefs.getBoolean(KEY_AUTO_DOWNLOAD_METADATA, true),
@@ -61,6 +79,15 @@ class SettingsStore(context: Context) {
             .putString(KEY_METADATA_LANGUAGE, settings.metadataLanguage)
             .putString(KEY_SCAN_INTERVAL, settings.scanInterval)
             .putString(KEY_SCRAPE_STRATEGY, settings.scrapeStrategy)
+            .putString(KEY_SCRAPER_SOURCE_ORDER, settings.scraperSourceOrder)
+            .putBoolean(KEY_SCRAPER_LOCAL_NFO, settings.scraperLocalNfo)
+            .putBoolean(KEY_SCRAPER_LOCAL_ARTWORK, settings.scraperLocalArtwork)
+            .putBoolean(KEY_SCRAPER_SERVER_METADATA, settings.scraperServerMetadata)
+            .putBoolean(KEY_SCRAPER_ONLINE_TMDB, settings.scraperOnlineTmdb)
+            .putBoolean(KEY_SCRAPER_ONLINE_TVDB, settings.scraperOnlineTvdb)
+            .putBoolean(KEY_SCRAPER_ONLINE_BANGUMI, settings.scraperOnlineBangumi)
+            .putBoolean(KEY_SCRAPER_WRITE_BACK, settings.scraperWriteBack)
+            .putBoolean(KEY_QUICK_SYNC_DELETED_FILES, settings.quickSyncDeletedFiles)
             .putString(KEY_METADATA_CACHE_LIMIT, settings.metadataCacheLimit)
             .putString(KEY_ARTWORK_CACHE_LIMIT, settings.artworkCacheLimit)
             .putBoolean(KEY_AUTO_DOWNLOAD_METADATA, settings.autoDownloadMetadata)
@@ -104,6 +131,15 @@ class SettingsStore(context: Context) {
         private const val KEY_METADATA_LANGUAGE = "metadata_language"
         private const val KEY_SCAN_INTERVAL = "scan_interval"
         private const val KEY_SCRAPE_STRATEGY = "scrape_strategy"
+        private const val KEY_SCRAPER_SOURCE_ORDER = "scraper_source_order"
+        private const val KEY_SCRAPER_LOCAL_NFO = "scraper_local_nfo"
+        private const val KEY_SCRAPER_LOCAL_ARTWORK = "scraper_local_artwork"
+        private const val KEY_SCRAPER_SERVER_METADATA = "scraper_server_metadata"
+        private const val KEY_SCRAPER_ONLINE_TMDB = "scraper_online_tmdb"
+        private const val KEY_SCRAPER_ONLINE_TVDB = "scraper_online_tvdb"
+        private const val KEY_SCRAPER_ONLINE_BANGUMI = "scraper_online_bangumi"
+        private const val KEY_SCRAPER_WRITE_BACK = "scraper_write_back"
+        private const val KEY_QUICK_SYNC_DELETED_FILES = "quick_sync_deleted_files"
         private const val KEY_METADATA_CACHE_LIMIT = "metadata_cache_limit"
         private const val KEY_ARTWORK_CACHE_LIMIT = "artwork_cache_limit"
         private const val KEY_AUTO_DOWNLOAD_METADATA = "auto_download_metadata"

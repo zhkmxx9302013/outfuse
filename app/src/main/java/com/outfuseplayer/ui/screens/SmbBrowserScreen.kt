@@ -61,7 +61,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -84,9 +83,6 @@ import com.outfuseplayer.ui.sortedEntriesFor
 import com.outfuseplayer.ui.theme.PrimaryAmber
 import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.SoftTeal
-import com.outfuseplayer.ui.theme.Surface2
-import com.outfuseplayer.ui.theme.TextMuted
-import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -100,6 +96,7 @@ fun SmbBrowserScreen(
     onBack: () -> Unit,
     onSourceAdded: (MediaSource) -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaRemoved: (String, List<String>) -> Unit = { _, _ -> },
     onOpenMedia: (LibraryItem, List<LibraryItem>) -> Unit = { _, _ -> }
 ) {
     BackHandler(onBack = onBack)
@@ -199,8 +196,8 @@ fun SmbBrowserScreen(
                     onClick = { currentPath = currentPath.parentSmbPath() },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(7.dp),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
                 ) {
                     Text("上一级")
                 }
@@ -300,13 +297,16 @@ fun SmbBrowserScreen(
                 val config = activeConfig()
                 scope.launch {
                     busy = true
-                    val resultMessage = when (action) {
-                        FileAction.DELETE -> repository.delete(config, entry.path, entry.isDirectory).message
-                        FileAction.RENAME -> repository.rename(config, entry.path, value).message
-                        FileAction.MOVE -> repository.move(config, entry.path, value).message
-                        FileAction.DOWNLOAD -> repository.download(config, entry.path, File(context.getExternalFilesDir(null), "downloads")).message
+                    val result = when (action) {
+                        FileAction.DELETE -> repository.delete(config, entry.path, entry.isDirectory)
+                        FileAction.RENAME -> repository.rename(config, entry.path, value)
+                        FileAction.MOVE -> repository.move(config, entry.path, value)
+                        FileAction.DOWNLOAD -> repository.download(config, entry.path, File(context.getExternalFilesDir(null), "downloads"))
                     }
-                    status = resultMessage
+                    if (result.success && action != FileAction.DOWNLOAD) {
+                        onMediaRemoved(config.sourceId, listOf(entry.path))
+                    }
+                    status = result.message
                     actionEntry = null
                     loadPath(currentPath)
                     busy = false
@@ -334,11 +334,11 @@ private fun SmbBrowserTopBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         IconButton(onClick = onBack) {
-            Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = Color.White)
+            Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onBackground)
         }
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1)
-            Text(path, style = MaterialTheme.typography.labelMedium, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
+            Text(path, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (busy) {
             CircularProgressIndicator(color = PrimaryOrange, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
@@ -354,8 +354,8 @@ private fun SmbBrowserTopBar(
 private fun BrowserStatusLine(status: String, busy: Boolean) {
     Surface(
         shape = RoundedCornerShape(7.dp),
-        color = Surface2.copy(alpha = 0.56f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
     ) {
         Row(
             modifier = Modifier
@@ -369,7 +369,7 @@ private fun BrowserStatusLine(status: String, busy: Boolean) {
             } else {
                 Icon(Icons.Outlined.Check, contentDescription = null, tint = PrimaryOrange, modifier = Modifier.size(18.dp))
             }
-            Text(status, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.86f), maxLines = 2)
+            Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.86f), maxLines = 2)
         }
     }
 }
@@ -392,10 +392,10 @@ private fun BrowserViewControls(
                 label = { Text(option.label) },
                 shape = RoundedCornerShape(7.dp),
                 colors = FilterChipDefaults.filterChipColors(
-                    containerColor = Surface2.copy(alpha = 0.48f),
-                    labelColor = TextMuted,
-                    selectedContainerColor = Color.White.copy(alpha = 0.12f),
-                    selectedLabelColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
                 )
             )
         }
@@ -406,8 +406,8 @@ private fun BrowserViewControls(
                 label = { Text(option.label) },
                 shape = RoundedCornerShape(7.dp),
                 colors = FilterChipDefaults.filterChipColors(
-                    containerColor = Surface2.copy(alpha = 0.48f),
-                    labelColor = TextMuted,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
                     selectedLabelColor = PrimaryOrange
                 )
@@ -430,8 +430,8 @@ private fun BrowserEntryRow(
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else OutfuseSurface.copy(alpha = 0.78f),
-        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.06f))
+        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -449,7 +449,7 @@ private fun BrowserEntryRow(
                 Text(
                     entry.name,
                     style = MaterialTheme.typography.titleMedium,
-                    color = if (enabled) Color.White else TextMuted,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -462,16 +462,16 @@ private fun BrowserEntryRow(
                         else -> entry.size.toReadableSize()
                     },
                     style = MaterialTheme.typography.labelMedium,
-                    color = TextMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
             if (entry.isDirectory) {
-                Icon(Icons.Outlined.KeyboardArrowRight, contentDescription = null, tint = TextMuted)
+                Icon(Icons.Outlined.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onActionClick) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = TextMuted)
+                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -492,8 +492,8 @@ private fun BrowserEntryCard(
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else OutfuseSurface.copy(alpha = 0.78f),
-        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.06f))
+        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
     ) {
         Column(
             modifier = Modifier.padding(if (compact) 8.dp else 10.dp),
@@ -509,7 +509,7 @@ private fun BrowserEntryCard(
             Text(
                 entry.name,
                 style = MaterialTheme.typography.labelLarge,
-                color = if (enabled) Color.White else TextMuted,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = if (compact) 1 else 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -523,13 +523,13 @@ private fun BrowserEntryCard(
                         else -> entry.size.toReadableSize()
                     },
                     style = MaterialTheme.typography.labelMedium,
-                    color = TextMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
             IconButton(onClick = onActionClick, modifier = Modifier.align(Alignment.End)) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = TextMuted)
+                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -611,9 +611,9 @@ private fun BrowserEntryPreview(
         } else {
             Surface(
                 modifier = Modifier.fillMaxSize(),
-                color = Surface2.copy(alpha = 0.72f),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
                 shape = shape,
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -628,7 +628,7 @@ private fun BrowserEntryPreview(
                             entry.isDirectory -> PrimaryAmber
                             entry.isImage -> SoftTeal
                             entry.isVideo -> PrimaryOrange
-                            else -> TextMuted
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         modifier = Modifier.size(28.dp)
                     )

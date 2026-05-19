@@ -178,6 +178,16 @@ class JellyfinRepository {
         val isPhoto = type.equals("Photo", ignoreCase = true)
         val name = item.optString("Name").ifBlank { id }
         val imageUrl = imageUrl(id).takeIf { id.isNotBlank() }
+        val genres = item.optJSONArray("Genres").orEmpty().toStringList().joinToString("|")
+        val mediaStreams = item.optJSONArray("MediaStreams").orEmpty()
+        val firstVideoStream = (0 until mediaStreams.length())
+            .asSequence()
+            .mapNotNull { mediaStreams.optJSONObject(it) }
+            .firstOrNull { it.optString("Type").equals("Video", ignoreCase = true) }
+        val firstAudioStream = (0 until mediaStreams.length())
+            .asSequence()
+            .mapNotNull { mediaStreams.optJSONObject(it) }
+            .firstOrNull { it.optString("Type").equals("Audio", ignoreCase = true) }
         val streamUrl = when {
             directory -> null
             isPhoto -> imageUrl
@@ -202,7 +212,16 @@ class JellyfinRepository {
                 "mediaServerType" to type,
                 "imageUrl" to imageUrl.orEmpty(),
                 "streamUrl" to streamUrl.orEmpty(),
-                "duration" to runtime.toString()
+                "duration" to runtime.toString(),
+                "overview" to item.optString("Overview"),
+                "originalTitle" to item.optString("OriginalTitle"),
+                "year" to item.optInt("ProductionYear", 0).takeIf { it > 0 }.orEmptyString(),
+                "rating" to item.optDouble("CommunityRating", Double.NaN).takeUnless { it.isNaN() }?.let { "%.1f".format(java.util.Locale.US, it) }.orEmpty(),
+                "genres" to genres,
+                "videoCodec" to firstVideoStream?.optString("Codec").orEmpty(),
+                "audioCodec" to firstAudioStream?.optString("Codec").orEmpty(),
+                "width" to firstVideoStream?.optInt("Width", 0).takeIf { it != null && it > 0 }.orEmptyString(),
+                "height" to firstVideoStream?.optInt("Height", 0).takeIf { it != null && it > 0 }.orEmptyString()
             )
         )
     }
@@ -242,6 +261,15 @@ class JellyfinRepository {
         get() = if (type == SourceType.EMBY) "Emby" else "Jellyfin"
 
     private fun JSONArray?.orEmpty(): JSONArray = this ?: JSONArray()
+
+    private fun JSONArray.toStringList(): List<String> =
+        buildList {
+            for (index in 0 until length()) {
+                optString(index).takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
+
+    private fun Int?.orEmptyString(): String = this?.toString().orEmpty()
 
     private fun parseMediaServerDate(value: String): Long? {
         if (value.isBlank()) return null

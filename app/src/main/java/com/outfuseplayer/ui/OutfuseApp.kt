@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import android.content.Context
 import android.net.Uri
 import com.outfuseplayer.data.AppSettings
+import com.outfuseplayer.data.LocalMediaRepository
 import com.outfuseplayer.data.MediaLibraryStore
 import com.outfuseplayer.data.MediaSourceStore
 import com.outfuseplayer.data.NfoMetadataRepository
@@ -78,6 +79,8 @@ import com.outfuseplayer.data.smb.toRemotePath
 import com.outfuseplayer.data.smb.toSmbUri
 import com.outfuseplayer.data.remote.RemoteConfigStore
 import com.outfuseplayer.data.remote.RemoteSourceRegistry
+import com.outfuseplayer.data.remote.WebDavRepository
+import com.outfuseplayer.data.remote.WebDavUriScheme
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.SourceHealth
@@ -107,6 +110,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
 
 private enum class RootDestination(
@@ -155,17 +160,6 @@ private data class LibraryDelta(
     )
 }
 
-private fun internalStorageSource(): MediaSource = MediaSource(
-    id = "local",
-    type = SourceType.LOCAL,
-    name = "内部存储",
-    baseUri = "/storage/emulated/0",
-    credentialsRef = null,
-    enabled = true,
-    health = SourceHealth.ONLINE,
-    detail = "系统内部存储 · 独立显示"
-)
-
 @Composable
 fun OutfuseApp() {
     val context = LocalContext.current
@@ -205,6 +199,8 @@ private fun OutfuseAppContent(
     val smbScanIndexStore = remember { SmbScanIndexStore(context) }
     val remoteConfigStore = remember { RemoteConfigStore(context) }
     val smbRepository = remember { SmbRepository() }
+    val webDavRepository = remember { WebDavRepository() }
+    val localMediaRepository = remember { LocalMediaRepository(context) }
     val nfoMetadataRepository = remember { NfoMetadataRepository(context) }
     val playbackPositionStore = remember { PlaybackPositionStore(context) }
     val userSeriesStore = remember { UserSeriesStore(context) }
@@ -233,11 +229,7 @@ private fun OutfuseAppContent(
     var scanJob by remember { mutableStateOf<Job?>(null) }
     val libraryItems = remember { mutableStateListOf<LibraryItem>() }
     val libraryItemIndex = remember { mutableMapOf<String, Int>() }
-    val mediaSources = remember {
-        mutableStateListOf<com.outfuseplayer.model.MediaSource>().apply {
-            add(internalStorageSource())
-        }
-    }
+    val mediaSources = remember { mutableStateListOf<com.outfuseplayer.model.MediaSource>() }
 
     fun libraryKey(item: LibraryItem): String = "${item.sourceId}\u0000${item.path}"
 
@@ -622,6 +614,93 @@ private fun OutfuseAppContent(
         persistLibrarySnapshot()
     }
 
+    fun removeItemsFromLibrary(sourceId: String, paths: Collection<String>): Int {
+        if (paths.isEmpty()) return 0
+        val normalizedPaths = paths.toSet()
+        val before = libraryItems.size
+        libraryItems.removeAll { it.sourceId == sourceId && it.path in normalizedPaths }
+        val removed = before - libraryItems.size
+        if (removed > 0) {
+            rebuildLibraryIndex()
+            persistLibrarySnapshot()
+            libraryNotice = "已同步移除 $removed 个不存在的媒体条目"
+        }
+        return removed
+    }
+
+    suspend fun LibraryItem.existsAtSource(): Boolean? = withContext(Dispatchers.IO) {
+        val stream = streamUrl ?: return@withContext null
+        val uri = runCatching { Uri.parse(stream) }.getOrNull() ?: return@withContext null
+        when {
+            uri.scheme.equals("smb", ignoreCase = true) -> {
+                val config = SmbCredentialRegistry.find(uri) ?: return@withContext null
+                val remotePath = uri.pathSegments.drop(1).joinToString("\\").toRemotePath()
+                smbRepository.exists(config, remotePath).takeIf { it.success }?.value
+            }
+            uri.scheme.equals(WebDavUriScheme, ignoreCase = true) -> {
+                val config = RemoteSourceRegistry.find(uri) ?: return@withContext null
+                webDavRepository.exists(config, path).takeIf { it.success }?.value
+            }
+            uri.scheme.equals("content", ignoreCase = true) -> {
+                runCatching {
+                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+                }.getOrDefault(false)
+            }
+            uri.scheme.equals("file", ignoreCase = true) -> {
+                File(uri.path.orEmpty()).exists()
+            }
+            uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true) -> {
+                runCatching {
+                    val connection = (URL(stream).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "HEAD"
+                        connectTimeout = 8_000
+                        readTimeout = 8_000
+                    }
+                    connection.responseCode in 200..399
+                }.getOrNull()
+            }
+            else -> null
+        }
+    }
+
+    fun syncDeletedFilesQuick(sourceId: String? = null) {
+        if (!appSettings.quickSyncDeletedFiles) return
+        val snapshot = libraryItems
+            .filter { it.streamUrl != null && (sourceId == null || it.sourceId == sourceId) }
+            .takeIf { it.isNotEmpty() }
+            ?: run {
+                libraryNotice = "当前没有可校验的媒体条目。"
+                return
+            }
+        scope.launch {
+            libraryNotice = "正在快速同步已删除文件：0/${snapshot.size}"
+            val missingBySource = linkedMapOf<String, MutableList<String>>()
+            var checked = 0
+            snapshot.forEach { item ->
+                val exists = item.existsAtSource()
+                if (exists == false) {
+                    missingBySource.getOrPut(item.sourceId) { mutableListOf() } += item.path
+                }
+                checked++
+                if (checked == snapshot.size || checked % 80 == 0) {
+                    libraryNotice = "正在快速同步已删除文件：$checked/${snapshot.size}，发现 ${missingBySource.values.sumOf { it.size }} 个缺失"
+                }
+            }
+            var removed = 0
+            missingBySource.forEach { (missingSourceId, paths) ->
+                removed += removeItemsFromLibrary(missingSourceId, paths)
+            }
+            if (removed > 0) {
+                persistLibrarySnapshot()
+            }
+            libraryNotice = if (removed > 0) {
+                "快速同步完成：已移除 $removed 个已删除文件"
+            } else {
+                "快速同步完成：未发现已删除文件"
+            }
+        }
+    }
+
     fun handleFileAction(request: FileActionRequest) {
         val resolved = configForItem(request.item)
         if (resolved == null) {
@@ -656,15 +735,44 @@ private fun OutfuseAppContent(
     }
 
     fun refreshCurrentLibrary() {
+        if (appSettings.quickSyncDeletedFiles) {
+            syncDeletedFilesQuick()
+        }
         val config = smbConfigStore.takeIf { it.hasSaved() }?.loadLast()
+        val localSources = mediaSources.filter {
+            it.type == SourceType.LOCAL && it.id != "local" && it.baseUri != null
+        }
         if (config != null) {
             val forceRepairScan = shouldRunRepairScan(config)
             if (forceRepairScan) {
                 libraryNotice = "检测到媒体库可能缺项，本次将执行修复全量扫描。"
             }
             startBackgroundScan(config, forceFullScan = forceRepairScan)
+        } else if (localSources.isNotEmpty()) {
+            scope.launch {
+                libraryNotice = "正在刷新本机目录媒体库"
+                localSources.forEach { source ->
+                    putSource(source.copy(health = SourceHealth.SYNCING, detail = "正在扫描本机目录"))
+                    val items = withContext(Dispatchers.IO) {
+                        val baseUri = source.baseUri.orEmpty()
+                        if (source.id == LocalMediaRepository.LOCAL_SOURCE_ID) {
+                            localMediaRepository.scan()
+                        } else {
+                            val uri = Uri.parse(baseUri)
+                            localMediaRepository.scanTree(uri, source.id, source.name)
+                        }
+                    }
+                    val delta = reconcileCompletedSourceScan(source.id, items)
+                    val videos = items.count { it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
+                    val images = items.count { it.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE }
+                    putSource(source.copy(health = SourceHealth.ONLINE, detail = "$videos 个视频 · $images 张图片 · ${delta.toScanChangeText()}"))
+                }
+                persistSourceSnapshot()
+                persistLibrarySnapshotNow()
+                libraryNotice = "本机目录媒体库刷新完成"
+            }
         } else {
-            libraryNotice = "当前没有可刷新的 SMB/NAS 来源。"
+            libraryNotice = "当前没有可刷新的 SMB/NAS 或本机目录来源。"
         }
     }
 
@@ -677,7 +785,7 @@ private fun OutfuseAppContent(
             var matched = 0
             snapshot.forEach { item ->
                 val metadata = withContext(Dispatchers.IO) {
-                    runCatching { nfoMetadataRepository.readForItem(item) }.getOrNull()
+                    runCatching { nfoMetadataRepository.readForItem(item, appSettings) }.getOrNull()
                 }
                 if (metadata != null) {
                     val index = libraryItemIndex[libraryKey(item)]
@@ -820,6 +928,9 @@ private fun OutfuseAppContent(
                 }
             }
             rebuildLibraryIndex()
+            if (appSettings.quickSyncDeletedFiles && loadedMediaCount > 0) {
+                syncDeletedFilesQuick()
+            }
         } catch (error: Exception) {
             libraryNotice = "恢复本地媒体库失败：${error.message ?: "未知错误"}"
         } finally {
@@ -961,7 +1072,7 @@ private fun OutfuseAppContent(
                     },
                     onSourceAdded = { source -> upsertSource(source) },
                     onSourceDeleted = { sourceId ->
-                        mediaSources.removeAll { it.id == sourceId && it.type != SourceType.LOCAL }
+                        mediaSources.removeAll { it.id == sourceId && it.id != "local" }
                         remoteConfigStore.delete(sourceId)
                         persistSourceSnapshot()
                         scope.launch {
@@ -982,6 +1093,7 @@ private fun OutfuseAppContent(
                         mergeMediaItems(discovered)
                         persistLibrarySnapshot()
                     },
+                    onMediaRemoved = ::removeItemsFromLibrary,
                     onSourceRevealHandled = { sourceRevealItem = null },
                     onOpenSourceMedia = onOpenSourceMedia,
                     onMediaScanCompleted = { sourceId, scannedItems ->
@@ -1047,7 +1159,7 @@ private fun OutfuseAppContent(
                     },
                     onSourceAdded = { source -> upsertSource(source) },
                     onSourceDeleted = { sourceId ->
-                        mediaSources.removeAll { it.id == sourceId && it.type != SourceType.LOCAL }
+                        mediaSources.removeAll { it.id == sourceId && it.id != "local" }
                         remoteConfigStore.delete(sourceId)
                         persistSourceSnapshot()
                         scope.launch {
@@ -1068,6 +1180,7 @@ private fun OutfuseAppContent(
                         mergeMediaItems(discovered)
                         persistLibrarySnapshot()
                     },
+                    onMediaRemoved = ::removeItemsFromLibrary,
                     onSourceRevealHandled = { sourceRevealItem = null },
                     onOpenSourceMedia = onOpenSourceMedia,
                     onMediaScanCompleted = { sourceId, scannedItems ->
@@ -1115,6 +1228,7 @@ private fun AppContent(
     onRefreshMetadata: () -> Unit,
     onFileAction: (FileActionRequest) -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaRemoved: (String, List<String>) -> Unit,
     onSourceRevealHandled: () -> Unit,
     onOpenSourceMedia: (LibraryItem, List<LibraryItem>) -> Unit,
     onMediaScanCompleted: (String, List<LibraryItem>) -> Unit
@@ -1157,7 +1271,7 @@ private fun AppContent(
                 return
             }
             if (libraryItems.isEmpty()) {
-                val managedSources = mediaSources.filter { it.type != SourceType.LOCAL }
+                val managedSources = mediaSources.filterNot { it.id == "local" }
                 if (!startupDataRestored) {
                     RestoringLibraryScreen(expanded = expanded)
                     return
@@ -1233,6 +1347,7 @@ private fun AppContent(
             onSourceDeleted = onSourceDeleted,
             onStartSourceScan = onStartSourceScan,
             onMediaDiscovered = onMediaDiscovered,
+            onMediaRemoved = onMediaRemoved,
             onOpenMedia = onOpenSourceMedia,
             onMediaScanCompleted = onMediaScanCompleted
         )
@@ -1465,7 +1580,7 @@ private fun FirstRunGuideScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "先添加 NAS/SMB 来源，或从内部存储浏览视频和图片。扫描完成后，首页会显示最近播放、最近添加、全部媒体和自建系列。",
+                        text = "先添加本机目录、NAS/SMB 或 WebDAV/Jellyfin 来源。扫描完成后，首页会显示最近播放、最近添加、全部媒体和自建系列。",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

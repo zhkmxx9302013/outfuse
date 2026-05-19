@@ -1,8 +1,11 @@
 ﻿package com.outfuseplayer.ui
 
 import com.outfuseplayer.data.smb.SmbEntry
+import com.outfuseplayer.data.smb.isImageFileName
+import com.outfuseplayer.data.smb.isVideoFileName
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
+import com.outfuseplayer.model.RemoteEntry
 import java.util.Locale
 
 enum class MediaSort(val label: String) {
@@ -54,14 +57,41 @@ fun List<SmbEntry>.sortedEntriesFor(sort: MediaSort, ascending: Boolean = true):
     return if (ascending) sorted else sorted.asReversed()
 }
 
+fun List<RemoteEntry>.sortedRemoteEntriesFor(sort: MediaSort, ascending: Boolean = true): List<RemoteEntry> {
+    val sorted = when (sort) {
+        MediaSort.NAME -> sortedWith(remoteEntryBaseComparator.thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.DATE -> sortedWith(remoteEntryBaseComparator.thenBy { it.modifiedAt ?: 0L }.thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.TYPE -> sortedWith(remoteEntryBaseComparator.thenBy { it.mediaTypeName }.thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.SOURCE -> sortedWith(remoteEntryBaseComparator.thenBy { it.path.lowercase(Locale.US) })
+    }
+    return if (ascending) sorted else sorted.asReversed()
+}
+
 private val entryBaseComparator = compareByDescending<SmbEntry> { it.isDirectory }
     .thenByDescending { it.isMedia }
+
+private val remoteEntryBaseComparator = compareByDescending<RemoteEntry> { it.isDirectory }
+    .thenByDescending { it.isMediaEntry }
 
 private val SmbEntry.mediaTypeName: String
     get() = when {
         isDirectory -> "0-folder"
         isImage -> "1-image"
         isVideo -> "2-video"
+        else -> "3-file"
+    }
+
+private val RemoteEntry.isMediaEntry: Boolean
+    get() = name.isImageFileName() ||
+        name.isVideoFileName() ||
+        mimeType?.startsWith("image/", ignoreCase = true) == true ||
+        mimeType?.startsWith("video/", ignoreCase = true) == true
+
+private val RemoteEntry.mediaTypeName: String
+    get() = when {
+        isDirectory -> "0-folder"
+        name.isImageFileName() || mimeType?.startsWith("image/", ignoreCase = true) == true -> "1-image"
+        name.isVideoFileName() || mimeType?.startsWith("video/", ignoreCase = true) == true -> "2-video"
         else -> "3-file"
     }
 

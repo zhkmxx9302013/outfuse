@@ -198,6 +198,77 @@ fun SettingsScreen(
                     checked = currentSettings.cacheArtworkOnWifi,
                     onCheckedChange = { update(currentSettings.copy(cacheArtworkOnWifi = it), if (it) "Wi-Fi 下会缓存海报" else "已关闭自动海报缓存") }
                 )
+                ToggleSetting(
+                    title = "快速同步已删除文件",
+                    checked = currentSettings.quickSyncDeletedFiles,
+                    onCheckedChange = {
+                        update(
+                            currentSettings.copy(quickSyncDeletedFiles = it),
+                            if (it) "刷新媒体库时会先校验已有文件是否仍存在" else "已关闭删除文件快速同步"
+                        )
+                    }
+                )
+            }
+        }
+        item {
+            SettingsSection(
+                title = "削刮来源",
+                icon = Icons.Outlined.Language,
+                tint = PrimaryOrange,
+                expanded = expanded
+            ) {
+                OptionSetting(
+                    title = "来源优先级",
+                    subtitle = "不改变界面展示，仅影响后台补全元数据和封面的顺序",
+                    options = listOf("本地优先", "服务器优先", "仅本地", "仅服务器", "手动确认"),
+                    selected = currentSettings.scraperSourceOrder,
+                    onSelected = { update(currentSettings.copy(scraperSourceOrder = it), "削刮来源优先级已设为 $it") }
+                )
+                ToggleSetting(
+                    title = "同目录 NFO",
+                    checked = currentSettings.scraperLocalNfo,
+                    onCheckedChange = { update(currentSettings.copy(scraperLocalNfo = it), if (it) "会读取同目录 NFO" else "已关闭同目录 NFO 读取") }
+                )
+                ToggleSetting(
+                    title = "同目录封面",
+                    checked = currentSettings.scraperLocalArtwork,
+                    onCheckedChange = { update(currentSettings.copy(scraperLocalArtwork = it), if (it) "会读取 poster/cover/folder/fanart 等本地封面" else "已关闭同目录封面读取") }
+                )
+                ToggleSetting(
+                    title = "媒体服务器元数据",
+                    checked = currentSettings.scraperServerMetadata,
+                    onCheckedChange = { update(currentSettings.copy(scraperServerMetadata = it), if (it) "Jellyfin/Emby 会优先使用服务器信息" else "已关闭服务器元数据优先") }
+                )
+                ToggleSetting(
+                    title = "TMDB",
+                    checked = currentSettings.scraperOnlineTmdb,
+                    onCheckedChange = { update(currentSettings.copy(scraperOnlineTmdb = it), if (it) "已启用 TMDB 候选来源入口" else "已关闭 TMDB 候选来源") }
+                )
+                ToggleSetting(
+                    title = "TVDB",
+                    checked = currentSettings.scraperOnlineTvdb,
+                    onCheckedChange = { update(currentSettings.copy(scraperOnlineTvdb = it), if (it) "已启用 TVDB 候选来源入口" else "已关闭 TVDB 候选来源") }
+                )
+                ToggleSetting(
+                    title = "Bangumi",
+                    checked = currentSettings.scraperOnlineBangumi,
+                    onCheckedChange = { update(currentSettings.copy(scraperOnlineBangumi = it), if (it) "已启用 Bangumi 候选来源入口" else "已关闭 Bangumi 候选来源") }
+                )
+                ToggleSetting(
+                    title = "允许写回源目录",
+                    checked = currentSettings.scraperWriteBack,
+                    onCheckedChange = {
+                        update(
+                            currentSettings.copy(scraperWriteBack = it),
+                            if (it) "允许支持写入的本机/SMB/WebDAV 来源写回 NFO 或封面" else "自动削刮结果只保存到 App 本地缓存"
+                        )
+                    }
+                )
+                Text(
+                    "当前实现会立即使用本地 NFO、同目录封面和媒体服务器已有信息；在线来源作为配置入口保留，后续接入 API Key 后进入候选匹配队列。",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
         item {

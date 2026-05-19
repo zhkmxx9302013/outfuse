@@ -278,6 +278,25 @@ class SmbRepository {
             )
         }
 
+    suspend fun exists(config: SmbConfig, path: String): SmbActionResult<Boolean> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                withShare(config) { share ->
+                    share.getFileInformation(path.toRemotePath())
+                    true
+                }
+            }.fold(
+                onSuccess = { SmbActionResult(true, "文件存在", true) },
+                onFailure = { error ->
+                    if (error.isMissingFile()) {
+                        SmbActionResult(true, "文件不存在", false)
+                    } else {
+                        SmbActionResult(false, error.toFriendlyMessage(), null)
+                    }
+                }
+            )
+        }
+
     suspend fun delete(config: SmbConfig, path: String, directory: Boolean): SmbActionResult<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -545,6 +564,14 @@ class SmbRepository {
             raw.contains("Network is unreachable", ignoreCase = true) -> "网络不可达，请确认设备与 NAS 在同一网络"
             else -> raw
         }
+    }
+
+    private fun Throwable.isMissingFile(): Boolean {
+        val raw = message ?: javaClass.simpleName
+        return raw.contains("STATUS_OBJECT_NAME_NOT_FOUND", ignoreCase = true) ||
+            raw.contains("STATUS_NO_SUCH_FILE", ignoreCase = true) ||
+            raw.contains("STATUS_OBJECT_PATH_NOT_FOUND", ignoreCase = true) ||
+            raw.contains("not found", ignoreCase = true)
     }
 }
 

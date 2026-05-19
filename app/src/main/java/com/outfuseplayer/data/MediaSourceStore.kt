@@ -19,14 +19,14 @@ class MediaSourceStore(context: Context) {
                 for (index in 0 until array.length()) {
                     array.optJSONObject(index)?.toMediaSourceOrNull()?.let(::add)
                 }
-            }
+            }.filterNot { it.type == SourceType.LOCAL && it.id == INTERNAL_LOCAL_SOURCE_ID }
         }.getOrDefault(emptyList())
     }
 
     fun save(sources: List<MediaSource>) {
         val array = JSONArray()
         sources
-            .filter { it.type != SourceType.LOCAL }
+            .filterNot { it.type == SourceType.LOCAL && it.id == INTERNAL_LOCAL_SOURCE_ID }
             .distinctBy { it.id }
             .forEach { array.put(it.toJson()) }
         sourceFile.writeText(array.toString())
@@ -61,6 +61,10 @@ class MediaSourceStore(context: Context) {
 
     private fun JSONObject.nullableString(key: String): String? =
         if (isNull(key)) null else optString(key)
+
+    private companion object {
+        const val INTERNAL_LOCAL_SOURCE_ID = "local"
+    }
 }
 
 

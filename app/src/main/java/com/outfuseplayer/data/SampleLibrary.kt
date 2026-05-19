@@ -14,16 +14,6 @@ object SampleLibrary {
 
     val sources = listOf(
         MediaSource(
-            id = "local",
-            type = SourceType.LOCAL,
-            name = "内部存储",
-            baseUri = "/storage/emulated/0",
-            credentialsRef = null,
-            enabled = true,
-            health = SourceHealth.ONLINE,
-            detail = "系统内部存储 · 独立显示"
-        ),
-        MediaSource(
             id = "smb",
             type = SourceType.SMB,
             name = "SMB - 家用 NAS",

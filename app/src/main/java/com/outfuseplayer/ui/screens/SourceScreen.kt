@@ -4,6 +4,7 @@ import android.Manifest
 import android.net.Uri
 import android.os.Build
 import android.content.pm.PackageManager
+import android.provider.DocumentsContract
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,7 +30,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -43,14 +47,19 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
@@ -72,6 +81,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.onFocusEvent
@@ -106,19 +116,25 @@ import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.RemoteEntry
 import com.outfuseplayer.model.SourceHealth
 import com.outfuseplayer.model.SourceType
+import com.outfuseplayer.ui.FileAction
+import com.outfuseplayer.ui.MediaLayout
+import com.outfuseplayer.ui.MediaSort
+import com.outfuseplayer.ui.components.FilePreviewThumb
+import com.outfuseplayer.ui.sortedRemoteEntriesFor
 import com.outfuseplayer.ui.theme.Danger
 import com.outfuseplayer.ui.theme.ElectricBlue
 import com.outfuseplayer.ui.theme.PrimaryAmber
 import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.SoftTeal
-import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
-import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.Locale
+import kotlin.math.absoluteValue
 
 data class SourceScanUiState(
     val sourceId: String,
@@ -135,6 +151,14 @@ data class SourceScanUiState(
     val message: String
 )
 
+private enum class SourceBrowserFilter(val label: String) {
+    ALL("全部"),
+    FOLDERS("文件夹"),
+    VIDEOS("视频"),
+    IMAGES("图片"),
+    FILES("文件")
+}
+
 @Composable
 fun SourceScreen(
     sources: List<MediaSource>,
@@ -146,10 +170,12 @@ fun SourceScreen(
     onSourceDeleted: (String) -> Unit = {},
     onStartSourceScan: (SmbConfig) -> Unit = {},
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaRemoved: (String, List<String>) -> Unit = { _, _ -> },
     onOpenMedia: (LibraryItem, List<LibraryItem>) -> Unit = { _, _ -> },
     onMediaScanCompleted: (String, List<LibraryItem>) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val store = remember { SmbConfigStore(context) }
     val remoteStore = remember { RemoteConfigStore(context) }
     val repository = remember { SmbRepository() }
@@ -164,15 +190,19 @@ fun SourceScreen(
     var remoteBrowserConfig by remember { mutableStateOf<RemoteSourceConfig?>(null) }
     var smbHighlightPath by remember { mutableStateOf<String?>(null) }
     var remoteHighlightPath by remember { mutableStateOf<String?>(null) }
+    var localHighlightPath by remember { mutableStateOf<String?>(null) }
+    var localInitialDocumentId by remember { mutableStateOf<String?>(null) }
     var browserPublishSource by remember { mutableStateOf(true) }
     var editConfig by remember { mutableStateOf<SmbConfig?>(null) }
     var editRemoteConfig by remember { mutableStateOf<RemoteSourceConfig?>(null) }
+    var editLocalSource by remember { mutableStateOf<MediaSource?>(null) }
     var editSourceId by remember { mutableStateOf<String?>(null) }
+    var localBrowserSource by remember { mutableStateOf<MediaSource?>(null) }
     var addSourceType by rememberSaveable { mutableStateOf(SourceType.SMB.name) }
     var pendingDelete by remember { mutableStateOf<MediaSource?>(null) }
     var addVisible by rememberSaveable { mutableStateOf(true) }
-    val internalSources = sources.filter { it.type == SourceType.LOCAL }
-    val managedSources = sources.filterNot { it.type == SourceType.LOCAL }
+    var localOperationStatus by remember { mutableStateOf<String?>(null) }
+    val managedSources = sources.filterNot { it.id == INTERNAL_LOCAL_SOURCE_ID }
 
     LaunchedEffect(initialConfig, hasSavedConfig) {
         if (hasSavedConfig && initialConfig.server.isNotBlank() && initialConfig.share.isNotBlank()) {
@@ -194,7 +224,7 @@ fun SourceScreen(
     }
 
     fun requestDelete(source: MediaSource) {
-        if (source.type != SourceType.LOCAL) {
+        if (source.id != INTERNAL_LOCAL_SOURCE_ID) {
             pendingDelete = source
         }
     }
@@ -205,10 +235,170 @@ fun SourceScreen(
             editSourceId = null
             editConfig = null
             editRemoteConfig = null
+            editLocalSource = null
         }
         remoteStore.delete(source.id)
         onSourceDeleted(source.id)
         pendingDelete = null
+    }
+
+    fun localPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+    fun publishLocalSource(sourceId: String, sourceName: String, baseUri: String, items: List<LibraryItem>, syncing: Boolean = false) {
+        val videos = items.count { it.itemType != LibraryItemType.IMAGE }
+        val images = items.count { it.itemType == LibraryItemType.IMAGE }
+        onSourceAdded(
+            MediaSource(
+                id = sourceId,
+                type = SourceType.LOCAL,
+                name = sourceName,
+                baseUri = baseUri,
+                credentialsRef = if (baseUri.startsWith("content://")) "persistable-uri" else null,
+                enabled = true,
+                health = if (syncing) SourceHealth.SYNCING else SourceHealth.ONLINE,
+                detail = if (syncing) "正在扫描本机目录" else "$videos 个视频 · $images 张图片"
+            )
+        )
+    }
+
+    fun scanMediaStoreLocal() {
+        scope.launch {
+            val sourceId = LocalMediaRepository.LOCAL_SOURCE_ID
+            val sourceName = LocalMediaRepository.LOCAL_SOURCE_NAME
+            localOperationStatus = "正在扫描系统媒体库"
+            publishLocalSource(sourceId, sourceName, "content://media/external", emptyList(), syncing = true)
+            val items = localRepository.scan()
+            onMediaScanCompleted(sourceId, items)
+            publishLocalSource(sourceId, sourceName, "content://media/external", items)
+            localOperationStatus = if (items.isEmpty()) {
+                "系统媒体库中未发现支持的视频或图片。"
+            } else {
+                "已为“$sourceName”建立媒体库：${items.count { it.itemType != LibraryItemType.IMAGE }} 个视频 · ${items.count { it.itemType == LibraryItemType.IMAGE }} 张图片"
+            }
+        }
+    }
+
+    val localPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result.values.all { it }) {
+            scanMediaStoreLocal()
+        } else {
+            localOperationStatus = "需要媒体读取权限后才能扫描系统媒体库。"
+        }
+    }
+
+    fun requestOrScanMediaStoreLocal() {
+        val permissions = localPermissions()
+        val granted = permissions.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+        if (granted) scanMediaStoreLocal() else localPermissionLauncher.launch(permissions)
+    }
+
+    fun scanLocalSource(source: MediaSource) {
+        val baseUri = source.baseUri.orEmpty()
+        val treeUri = baseUri.takeIf { it.startsWith("content://") && it.contains("/tree/") }
+            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (treeUri == null) {
+            requestOrScanMediaStoreLocal()
+            return
+        }
+        scope.launch {
+            val sourceId = source.id
+            val sourceName = source.name.ifBlank { LocalMediaRepository.treeSourceName(treeUri) }
+            localOperationStatus = "正在扫描本机目录：$sourceName"
+            publishLocalSource(sourceId, sourceName, treeUri.toString(), emptyList(), syncing = true)
+            val items = localRepository.scanTree(treeUri, sourceId, sourceName)
+            onMediaScanCompleted(sourceId, items)
+            publishLocalSource(sourceId, sourceName, treeUri.toString(), items)
+            localOperationStatus = if (items.isEmpty()) {
+                "“$sourceName”中未发现支持的视频或图片。"
+            } else {
+                "已刷新“$sourceName”：${items.count { it.itemType != LibraryItemType.IMAGE }} 个视频 · ${items.count { it.itemType == LibraryItemType.IMAGE }} 张图片"
+            }
+        }
+    }
+
+    fun localTreeUri(source: MediaSource): Uri? =
+        source.baseUri
+            ?.takeIf { it.startsWith("content://") && it.contains("/tree/") }
+            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+
+    fun showAddPanel(type: SourceType = SourceType.SMB) {
+        addVisible = true
+        editConfig = null
+        editRemoteConfig = null
+        editLocalSource = null
+        editSourceId = null
+        addSourceType = type.name
+    }
+
+    fun openSource(source: MediaSource) {
+        when (source.type) {
+            SourceType.LOCAL -> {
+                if (localTreeUri(source) != null) {
+                    localHighlightPath = null
+                    localInitialDocumentId = null
+                    localBrowserSource = source
+                } else {
+                    localOperationStatus = "系统媒体库来源没有固定文件树；可通过刷新按钮重新扫描，或添加一个具体本机目录进行浏览。"
+                }
+            }
+            SourceType.SMB -> {
+                configForSource(source)?.let {
+                    browserPublishSource = true
+                    smbHighlightPath = null
+                    remoteHighlightPath = null
+                    localHighlightPath = null
+                    browserConfig = it
+                }
+            }
+            else -> {
+                remoteConfigForSource(source)?.let {
+                    smbHighlightPath = null
+                    remoteHighlightPath = null
+                    localHighlightPath = null
+                    remoteBrowserConfig = it
+                }
+            }
+        }
+    }
+
+    fun editSource(source: MediaSource) {
+        when (source.type) {
+            SourceType.LOCAL -> {
+                editConfig = null
+                editRemoteConfig = null
+                editLocalSource = source
+                editSourceId = source.id
+                addSourceType = SourceType.LOCAL.name
+                addVisible = true
+            }
+            SourceType.SMB -> {
+                configForSource(source)?.let {
+                    editConfig = it
+                    editRemoteConfig = null
+                    editLocalSource = null
+                    editSourceId = source.id
+                    addSourceType = SourceType.SMB.name
+                    addVisible = true
+                }
+            }
+            else -> {
+                remoteConfigForSource(source)?.let {
+                    editConfig = null
+                    editRemoteConfig = it
+                    editLocalSource = null
+                    editSourceId = source.id
+                    addSourceType = it.type.name
+                    addVisible = true
+                }
+            }
+        }
     }
 
     LaunchedEffect(revealItem?.id, revealItem?.path, sources.size) {
@@ -219,6 +409,7 @@ fun SourceScreen(
                 configForSource(source)?.let { config ->
                     smbHighlightPath = item.path
                     remoteHighlightPath = null
+                    localHighlightPath = null
                     browserPublishSource = true
                     browserConfig = config.copy(path = item.path.parentSmbPath())
                     onRevealHandled()
@@ -227,6 +418,7 @@ fun SourceScreen(
             SourceType.WEBDAV -> {
                 remoteConfigForSource(source)?.let { config ->
                     remoteHighlightPath = item.path.trim('/')
+                    localHighlightPath = null
                     smbHighlightPath = null
                     remoteBrowserConfig = config.copy(path = item.path.parentRemotePath())
                     onRevealHandled()
@@ -235,10 +427,21 @@ fun SourceScreen(
             SourceType.JELLYFIN, SourceType.EMBY -> {
                 remoteConfigForSource(source)?.let { config ->
                     remoteHighlightPath = item.path.trim('/')
+                    localHighlightPath = null
                     smbHighlightPath = null
                     remoteBrowserConfig = config
                     onRevealHandled()
                 }
+            }
+            SourceType.LOCAL -> {
+                localTreeUri(source)?.let { treeUri ->
+                    localHighlightPath = item.path
+                    localInitialDocumentId = item.path.parentDocumentId(DocumentsContract.getTreeDocumentId(treeUri))
+                    localBrowserSource = source
+                    smbHighlightPath = null
+                    remoteHighlightPath = null
+                    onRevealHandled()
+                } ?: onRevealHandled()
             }
             else -> onRevealHandled()
         }
@@ -254,6 +457,7 @@ fun SourceScreen(
             onBack = { browserConfig = null },
             onSourceAdded = onSourceAdded,
             onMediaDiscovered = onMediaDiscovered,
+            onMediaRemoved = onMediaRemoved,
             onOpenMedia = onOpenMedia
         )
         return
@@ -268,6 +472,25 @@ fun SourceScreen(
             highlightPath = remoteHighlightPath,
             onBack = { remoteBrowserConfig = null },
             onMediaDiscovered = onMediaDiscovered,
+            onMediaRemoved = onMediaRemoved,
+            onOpenMedia = onOpenMedia
+        )
+        return
+    }
+
+    localBrowserSource?.let { source ->
+        LocalBrowserScreen(
+            source = source,
+            initialDocumentId = localInitialDocumentId,
+            highlightPath = localHighlightPath,
+            expanded = expanded,
+            onBack = {
+                localBrowserSource = null
+                localInitialDocumentId = null
+                localHighlightPath = null
+            },
+            onMediaDiscovered = onMediaDiscovered,
+            onMediaRemoved = onMediaRemoved,
             onOpenMedia = onOpenMedia
         )
         return
@@ -293,13 +516,7 @@ fun SourceScreen(
 
     if (expanded) {
         Column(modifier = Modifier.fillMaxSize()) {
-            SourceTopBar(expanded = true, onAdd = {
-                addVisible = true
-                editConfig = null
-                editRemoteConfig = null
-                editSourceId = null
-                addSourceType = SourceType.SMB.name
-            })
+            SourceTopBar(expanded = true, onAdd = { showAddPanel() })
             Row(
                 modifier = Modifier
                     .fillMaxSize()
@@ -312,43 +529,15 @@ fun SourceScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(bottom = 28.dp)
                 ) {
-                    if (internalSources.isNotEmpty()) {
-                        item { SourceSectionTitle("内部存储") }
-                        items(internalSources, key = { it.id }) { source ->
-                            SourceRow(source = source)
-                        }
+                    localOperationStatus?.let { message ->
+                        item { StatusLine(message) }
                     }
                     item { SourceSectionTitle("来源状态") }
                     items(managedSources, key = { it.id }) { source ->
                         SourceRow(
                             source = source,
-                            onOpen = {
-                                configForSource(source)?.let {
-                                    browserPublishSource = true
-                                    smbHighlightPath = null
-                                    remoteHighlightPath = null
-                                    browserConfig = it
-                                } ?: remoteConfigForSource(source)?.let {
-                                    smbHighlightPath = null
-                                    remoteHighlightPath = null
-                                    remoteBrowserConfig = it
-                                }
-                            },
-                            onEdit = {
-                                configForSource(source)?.let {
-                                    editConfig = it
-                                    editRemoteConfig = null
-                                    editSourceId = source.id
-                                    addSourceType = SourceType.SMB.name
-                                    addVisible = true
-                                } ?: remoteConfigForSource(source)?.let {
-                                    editConfig = null
-                                    editRemoteConfig = it
-                                    editSourceId = source.id
-                                    addSourceType = it.type.name
-                                    addVisible = true
-                                }
-                            },
+                            onOpen = { openSource(source) },
+                            onEdit = { editSource(source) },
                             onDelete = { requestDelete(source) }
                         )
                     }
@@ -364,6 +553,7 @@ fun SourceScreen(
                             initialConfig = editConfig ?: emptyConfig,
                             initialSourceType = runCatching { SourceType.valueOf(addSourceType) }.getOrDefault(SourceType.SMB),
                             initialRemoteConfig = editRemoteConfig,
+                            initialLocalSource = editLocalSource,
                             repository = repository,
                             webDavRepository = webDavRepository,
                             jellyfinRepository = jellyfinRepository,
@@ -378,6 +568,7 @@ fun SourceScreen(
                                 editSourceId = null
                                 editConfig = null
                                 editRemoteConfig = null
+                                editLocalSource = null
                                 addSourceType = source.type.name
                             },
                             onMediaDiscovered = onMediaDiscovered,
@@ -408,18 +599,13 @@ fun SourceScreen(
             contentPadding = PaddingValues(bottom = 22.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { SourceTopBar(expanded = false, onAdd = {
-                addVisible = true
-                editConfig = null
-                editRemoteConfig = null
-                editSourceId = null
-                addSourceType = SourceType.SMB.name
-            }) }
+            item { SourceTopBar(expanded = false, onAdd = { showAddPanel() }) }
             if (addVisible) item {
                 AddSmbPanel(
                     initialConfig = editConfig ?: emptyConfig,
                     initialSourceType = runCatching { SourceType.valueOf(addSourceType) }.getOrDefault(SourceType.SMB),
                     initialRemoteConfig = editRemoteConfig,
+                    initialLocalSource = editLocalSource,
                     repository = repository,
                     webDavRepository = webDavRepository,
                     jellyfinRepository = jellyfinRepository,
@@ -434,6 +620,7 @@ fun SourceScreen(
                         editSourceId = null
                         editConfig = null
                         editRemoteConfig = null
+                        editLocalSource = null
                         addSourceType = source.type.name
                     },
                     onMediaDiscovered = onMediaDiscovered,
@@ -451,13 +638,11 @@ fun SourceScreen(
                 )
             }
             if (addVisible) item { SourceTypeRail(contentPadding = PaddingValues(horizontal = 20.dp)) }
-            if (internalSources.isNotEmpty()) {
-                item { SourceSectionTitle("内部存储") }
-                items(internalSources, key = { it.id }) { source ->
-                    SourceRow(
-                        source = source,
-                        modifier = Modifier.padding(horizontal = 20.dp)
-                    )
+            localOperationStatus?.let { message ->
+                item {
+                    Box(modifier = Modifier.padding(horizontal = 20.dp)) {
+                        StatusLine(message)
+                    }
                 }
             }
             item { SourceSectionTitle("来源状态") }
@@ -465,33 +650,8 @@ fun SourceScreen(
                 SourceRow(
                     source = source,
                     modifier = Modifier.padding(horizontal = 20.dp),
-                    onOpen = {
-                        configForSource(source)?.let {
-                            browserPublishSource = true
-                            smbHighlightPath = null
-                            remoteHighlightPath = null
-                            browserConfig = it
-                        } ?: remoteConfigForSource(source)?.let {
-                            smbHighlightPath = null
-                            remoteHighlightPath = null
-                            remoteBrowserConfig = it
-                        }
-                    },
-                    onEdit = {
-                        configForSource(source)?.let {
-                            editConfig = it
-                            editRemoteConfig = null
-                            editSourceId = source.id
-                            addSourceType = SourceType.SMB.name
-                            addVisible = true
-                        } ?: remoteConfigForSource(source)?.let {
-                            editConfig = null
-                            editRemoteConfig = it
-                            editSourceId = source.id
-                            addSourceType = it.type.name
-                            addVisible = true
-                        }
-                    },
+                    onOpen = { openSource(source) },
+                    onEdit = { editSource(source) },
                     onDelete = { requestDelete(source) }
                 )
             }
@@ -594,29 +754,74 @@ private fun RemoteBrowserScreen(
     highlightPath: String? = null,
     onBack: () -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaRemoved: (String, List<String>) -> Unit,
     onOpenMedia: (LibraryItem, List<LibraryItem>) -> Unit
 ) {
     BackHandler(onBack = onBack)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val rootPath = remember(initialConfig.sourceId, initialConfig.path) { initialConfig.path.trim('/') }
     var currentConfig by remember(initialConfig.sourceId, rootPath) { mutableStateOf(initialConfig.copy(path = rootPath)) }
     var entries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("正在打开远程目录...") }
+    var sortName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaSort.NAME.name) }
+    var sortAscending by rememberSaveable(initialConfig.sourceId) { mutableStateOf(true) }
+    var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaLayout.LIST.name) }
+    var filterName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(SourceBrowserFilter.ALL.name) }
+    var actionEntry by remember { mutableStateOf<RemoteEntry?>(null) }
+    val sort = MediaSort.valueOf(sortName)
+    val layout = MediaLayout.valueOf(layoutName)
+    val filter = SourceBrowserFilter.valueOf(filterName)
+    val visibleEntries = entries
+        .filterForSourceBrowser(filter)
+        .sortedRemoteEntriesFor(sort, sortAscending)
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
 
-    LaunchedEffect(currentConfig.sourceId, currentConfig.path, currentConfig.token, currentConfig.userId) {
+    suspend fun loadRemotePath(config: RemoteSourceConfig) {
         busy = true
-        status = "正在打开 ${currentConfig.path.ifBlank { "/" }}"
-        val result = when (currentConfig.type) {
-            SourceType.WEBDAV -> webDavRepository.list(currentConfig, currentConfig.path)
-            SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.list(currentConfig, currentConfig.path)
+        status = "正在打开 ${config.path.ifBlank { "/" }}"
+        val result = when (config.type) {
+            SourceType.WEBDAV -> webDavRepository.list(config, config.path)
+            SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.list(config, config.path)
             else -> com.outfuseplayer.data.remote.RemoteActionResult<List<RemoteEntry>>(false, "暂不支持该来源类型", emptyList())
         }
         entries = result.value.orEmpty()
         status = result.message
         if (result.success) {
-            RemoteSourceRegistry.register(currentConfig)
+            RemoteSourceRegistry.register(config)
         }
         busy = false
+    }
+
+    fun openRemoteMedia(entry: RemoteEntry) {
+        RemoteSourceRegistry.register(currentConfig)
+        val mediaItems = visibleEntries
+            .filter { !it.isDirectory && it.isMediaEntry() }
+            .map { currentConfig.toLibraryItem(it) }
+        val selected = mediaItems.firstOrNull { it.path == entry.path } ?: currentConfig.toLibraryItem(entry)
+        val queue = mediaItems.ifEmpty { listOf(selected) }
+        onMediaDiscovered(queue)
+        onOpenMedia(selected, queue)
+        status = "正在打开：${entry.name}"
+    }
+
+    LaunchedEffect(currentConfig.sourceId, currentConfig.path, currentConfig.token, currentConfig.userId) {
+        loadRemotePath(currentConfig)
+    }
+
+    LaunchedEffect(visibleEntries, highlightPath, layout) {
+        val index = visibleEntries.indexOfFirst { entry ->
+            highlightPath?.trim('/')?.equals(entry.path.trim('/'), ignoreCase = true) == true
+        }
+        if (index >= 0) {
+            if (layout == MediaLayout.LIST) {
+                listState.animateScrollToItem(index)
+            } else {
+                gridState.animateScrollToItem(index)
+            }
+        }
     }
 
     LazyColumn(
@@ -664,6 +869,24 @@ private fun RemoteBrowserScreen(
         item {
             StatusLine(status = status)
         }
+        item {
+            SourceBrowserControls(
+                filter = filter,
+                sort = sort,
+                ascending = sortAscending,
+                layout = layout,
+                onFilter = { filterName = it.name },
+                onSort = {
+                    if (sort == it) {
+                        sortAscending = !sortAscending
+                    } else {
+                        sortName = it.name
+                        sortAscending = true
+                    }
+                },
+                onLayout = { layoutName = it.name }
+            )
+        }
         if (busy) {
             item {
                 Row(
@@ -676,7 +899,7 @@ private fun RemoteBrowserScreen(
                 }
             }
         }
-        if (!busy && entries.isEmpty()) {
+        if (!busy && visibleEntries.isEmpty()) {
             item {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
@@ -692,28 +915,302 @@ private fun RemoteBrowserScreen(
                 }
             }
         }
-        if (entries.isNotEmpty()) {
+        if (visibleEntries.isNotEmpty()) {
             item {
-                RemoteDirectoryEntries(
-                    entries = entries,
+                SourceBrowserEntries(
+                    entries = visibleEntries,
+                    layout = layout,
                     highlightPath = highlightPath,
+                    itemFactory = { currentConfig.toLibraryItem(it) },
+                    actionEnabled = true,
+                    actionUnsupportedMessage = if (currentConfig.type == SourceType.WEBDAV) null else "${currentConfig.type.remoteTypeLabel()} 不支持服务端文件删除、移动或重命名。",
                     onDirectoryClick = { entry ->
                         currentConfig = currentConfig.copy(path = entry.path.trim('/'))
                     },
+                    onMediaClick = ::openRemoteMedia,
+                    onActionClick = { entry -> actionEntry = entry }
+                )
+            }
+        }
+    }
+    actionEntry?.let { entry ->
+        SourceFileActionDialog(
+            entry = entry,
+            supportsWriteActions = currentConfig.type == SourceType.WEBDAV,
+            allowDownload = currentConfig.type == SourceType.WEBDAV && !entry.isDirectory,
+            unsupportedMessage = "${currentConfig.type.remoteTypeLabel()} 目前仅支持浏览和播放，不支持直接改动服务器文件。",
+            onDismiss = { actionEntry = null },
+            onSubmit = { action, value ->
+                scope.launch {
+                    busy = true
+                    status = when {
+                        currentConfig.type != SourceType.WEBDAV -> "${currentConfig.type.remoteTypeLabel()} 不支持文件管理操作。"
+                        else -> {
+                            val result = when (action) {
+                                FileAction.DELETE -> webDavRepository.delete(currentConfig, entry.path)
+                                FileAction.RENAME -> webDavRepository.rename(currentConfig, entry.path, value)
+                                FileAction.MOVE -> webDavRepository.move(currentConfig, entry.path, value)
+                                FileAction.DOWNLOAD -> webDavRepository.download(currentConfig, entry.path, File(context.getExternalFilesDir(null), "downloads"))
+                            }
+                            if (result.success && action != FileAction.DOWNLOAD) {
+                                onMediaRemoved(currentConfig.sourceId, listOf(entry.path))
+                            }
+                            result.message
+                        }
+                    }
+                    actionEntry = null
+                    loadRemotePath(currentConfig)
+                    busy = false
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun LocalBrowserScreen(
+    source: MediaSource,
+    initialDocumentId: String?,
+    highlightPath: String?,
+    expanded: Boolean,
+    onBack: () -> Unit,
+    onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onMediaRemoved: (String, List<String>) -> Unit,
+    onOpenMedia: (LibraryItem, List<LibraryItem>) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val treeUri = remember(source.baseUri) {
+        source.baseUri
+            ?.takeIf { it.startsWith("content://") && it.contains("/tree/") }
+            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+    }
+    val rootDocumentId = remember(treeUri) {
+        treeUri?.let { runCatching { DocumentsContract.getTreeDocumentId(it) }.getOrNull() }.orEmpty()
+    }
+
+    if (treeUri == null || rootDocumentId.isBlank()) {
+        BackHandler(onBack = onBack)
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding(),
+            contentPadding = PaddingValues(
+                start = if (expanded) 32.dp else 20.dp,
+                top = 8.dp,
+                end = if (expanded) 32.dp else 20.dp,
+                bottom = if (expanded) 32.dp else 24.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onBackground)
+                }
+            }
+            item { StatusLine("该本机来源不是可浏览的文件夹授权，请重新添加本机目录。") }
+        }
+        return
+    }
+
+    val startDocumentId = initialDocumentId?.takeIf { it.isNotBlank() } ?: rootDocumentId
+    var documentStack by remember(source.id, rootDocumentId, startDocumentId) {
+        mutableStateOf(if (startDocumentId == rootDocumentId) listOf(rootDocumentId) else listOf(rootDocumentId, startDocumentId))
+    }
+    val currentDocumentId = documentStack.lastOrNull().orEmpty()
+    var entries by remember(source.id) { mutableStateOf<List<RemoteEntry>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("正在打开本机目录...") }
+    var sortName by rememberSaveable(source.id) { mutableStateOf(MediaSort.NAME.name) }
+    var sortAscending by rememberSaveable(source.id) { mutableStateOf(true) }
+    var layoutName by rememberSaveable(source.id) { mutableStateOf(MediaLayout.LIST.name) }
+    var filterName by rememberSaveable(source.id) { mutableStateOf(SourceBrowserFilter.ALL.name) }
+    var actionEntry by remember { mutableStateOf<RemoteEntry?>(null) }
+    val sort = MediaSort.valueOf(sortName)
+    val layout = MediaLayout.valueOf(layoutName)
+    val filter = SourceBrowserFilter.valueOf(filterName)
+    val visibleEntries = entries
+        .filterForSourceBrowser(filter)
+        .sortedRemoteEntriesFor(sort, sortAscending)
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+
+    fun navigateBack() {
+        if (documentStack.size > 1) {
+            documentStack = documentStack.dropLast(1)
+        } else {
+            onBack()
+        }
+    }
+
+    BackHandler(onBack = ::navigateBack)
+
+    LaunchedEffect(source.id, currentDocumentId) {
+        busy = true
+        status = "正在打开 ${currentDocumentId.ifBlank { rootDocumentId }}"
+        val result = withContext(Dispatchers.IO) {
+            runCatching { queryLocalDocumentChildren(context, treeUri, currentDocumentId) }
+        }
+        entries = result.getOrDefault(emptyList())
+        status = result.fold(
+            onSuccess = { "已打开目录，共 ${it.size} 个条目" },
+            onFailure = { "打开目录失败：${it.message ?: "请确认文件夹授权仍然有效"}" }
+        )
+        busy = false
+    }
+
+    LaunchedEffect(visibleEntries, highlightPath, layout) {
+        val index = visibleEntries.indexOfFirst { entry ->
+            highlightPath?.equals(entry.path, ignoreCase = true) == true
+        }
+        if (index >= 0) {
+            if (layout == MediaLayout.LIST) {
+                listState.animateScrollToItem(index)
+            } else {
+                gridState.animateScrollToItem(index)
+            }
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .safeDrawingPadding(),
+        contentPadding = PaddingValues(
+            start = if (expanded) 32.dp else 20.dp,
+            top = 8.dp,
+            end = if (expanded) 32.dp else 20.dp,
+            bottom = if (expanded) 32.dp else 24.dp
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                IconButton(onClick = ::navigateBack) {
+                    Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onBackground)
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(source.name.ifBlank { "本机目录" }, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        text = currentDocumentId,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                OutlinedButton(
+                    enabled = currentDocumentId != rootDocumentId,
+                    onClick = { documentStack = listOf(rootDocumentId) },
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                ) {
+                    Text("根目录")
+                }
+            }
+        }
+        item { StatusLine(status = status) }
+        item {
+            SourceBrowserControls(
+                filter = filter,
+                sort = sort,
+                ascending = sortAscending,
+                layout = layout,
+                onFilter = { filterName = it.name },
+                onSort = {
+                    if (sort == it) {
+                        sortAscending = !sortAscending
+                    } else {
+                        sortName = it.name
+                        sortAscending = true
+                    }
+                },
+                onLayout = { layoutName = it.name }
+            )
+        }
+        if (busy) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(color = PrimaryOrange, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                    Text("加载目录中...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        if (!busy && visibleEntries.isEmpty()) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                ) {
+                    Text(
+                        text = "当前目录没有可显示的文件或文件夹。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        }
+        if (visibleEntries.isNotEmpty()) {
+            item {
+                SourceBrowserEntries(
+                    entries = visibleEntries,
+                    layout = layout,
+                    highlightPath = highlightPath,
+                    itemFactory = { source.toLocalLibraryItem(treeUri, it) },
+                    actionEnabled = true,
+                    actionUnsupportedMessage = null,
+                    onDirectoryClick = { entry -> documentStack = documentStack + entry.path },
                     onMediaClick = { entry ->
-                        RemoteSourceRegistry.register(currentConfig)
-                        val mediaItems = entries
+                        val mediaItems = visibleEntries
                             .filter { !it.isDirectory && it.isMediaEntry() }
-                            .map { currentConfig.toLibraryItem(it) }
-                        val selected = mediaItems.firstOrNull { it.path == entry.path } ?: currentConfig.toLibraryItem(entry)
+                            .map { source.toLocalLibraryItem(treeUri, it) }
+                        val selected = mediaItems.firstOrNull { it.path == entry.path } ?: source.toLocalLibraryItem(treeUri, entry)
                         val queue = mediaItems.ifEmpty { listOf(selected) }
                         onMediaDiscovered(queue)
                         onOpenMedia(selected, queue)
                         status = "正在打开：${entry.name}"
-                    }
+                    },
+                    onActionClick = { entry -> actionEntry = entry }
                 )
             }
         }
+    }
+    actionEntry?.let { entry ->
+        SourceFileActionDialog(
+            entry = entry,
+            supportsWriteActions = true,
+            allowDownload = !entry.isDirectory,
+            unsupportedMessage = null,
+            onDismiss = { actionEntry = null },
+            onSubmit = { action, value ->
+                scope.launch {
+                    busy = true
+                    status = withContext(Dispatchers.IO) {
+                        performLocalDocumentAction(context, treeUri, currentDocumentId, entry, action, value)
+                    }
+                    if (action != FileAction.DOWNLOAD && status.startsWith("已")) {
+                        onMediaRemoved(source.id, listOf(entry.path))
+                    }
+                    actionEntry = null
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching { queryLocalDocumentChildren(context, treeUri, currentDocumentId) }
+                    }
+                    entries = result.getOrDefault(entries)
+                    busy = false
+                }
+            }
+        )
     }
 }
 
@@ -722,6 +1219,7 @@ private fun AddSmbPanel(
     initialConfig: SmbConfig,
     initialSourceType: SourceType,
     initialRemoteConfig: RemoteSourceConfig?,
+    initialLocalSource: MediaSource?,
     repository: SmbRepository,
     webDavRepository: WebDavRepository,
     jellyfinRepository: JellyfinRepository,
@@ -800,6 +1298,20 @@ private fun AddSmbPanel(
         }
     }
 
+    LaunchedEffect(initialLocalSource?.id, initialLocalSource?.baseUri) {
+        initialLocalSource?.let {
+            selectedSourceType = SourceType.LOCAL.name
+            name = it.name.ifBlank { LocalMediaRepository.LOCAL_TREE_SOURCE_NAME }
+            entries = emptyList()
+            remoteEntries = emptyList()
+            status = if (it.baseUri.orEmpty().contains("/tree/")) {
+                "正在编辑本机目录来源。可保存名称、重新扫描当前目录，或重新选择目录。"
+            } else {
+                "正在编辑系统媒体库来源。可保存名称或重新扫描系统媒体库。"
+            }
+        }
+    }
+
     fun localPermissions(): Array<String> =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
@@ -840,18 +1352,28 @@ private fun AddSmbPanel(
             null
         }
 
-    fun publishLocalSource(items: List<LibraryItem>) {
+    fun publishLocalSource(
+        items: List<LibraryItem>,
+        sourceIdOverride: String? = null,
+        sourceNameOverride: String? = null,
+        baseUriOverride: String? = null
+    ) {
         val videos = items.count { it.itemType != LibraryItemType.IMAGE }
         val images = items.count { it.itemType == LibraryItemType.IMAGE }
-        val sourceId = items.firstOrNull()?.sourceId ?: LocalMediaRepository.LOCAL_SOURCE_ID
-        val sourceName = items.firstOrNull()?.sourceName ?: LocalMediaRepository.LOCAL_SOURCE_NAME
+        val sourceId = sourceIdOverride ?: items.firstOrNull()?.sourceId ?: LocalMediaRepository.LOCAL_SOURCE_ID
+        val sourceName = sourceNameOverride ?: items.firstOrNull()?.sourceName ?: LocalMediaRepository.LOCAL_SOURCE_NAME
+        val baseUri = baseUriOverride ?: if (sourceId == LocalMediaRepository.LOCAL_SOURCE_ID) {
+            "content://media/external"
+        } else {
+            items.firstOrNull()?.streamUrl?.substringBefore("/document/") ?: "content://local-folder"
+        }
         onSourceAdded(
             MediaSource(
                 id = sourceId,
                 type = SourceType.LOCAL,
                 name = sourceName,
-                baseUri = "content://media/external",
-                credentialsRef = null,
+                baseUri = baseUri,
+                credentialsRef = if (baseUri.startsWith("content://")) "persistable-uri" else null,
                 enabled = true,
                 health = SourceHealth.ONLINE,
                 detail = "$videos 个视频 · $images 张图片"
@@ -865,7 +1387,12 @@ private fun AddSmbPanel(
             status = "正在扫描本机视频和图片"
             val items = localRepository.scan()
             onMediaScanCompleted(LocalMediaRepository.LOCAL_SOURCE_ID, items)
-            publishLocalSource(items)
+            publishLocalSource(
+                items,
+                sourceIdOverride = LocalMediaRepository.LOCAL_SOURCE_ID,
+                sourceNameOverride = name.ifBlank { LocalMediaRepository.LOCAL_SOURCE_NAME },
+                baseUriOverride = "content://media/external"
+            )
             status = if (items.isEmpty()) "未发现本机媒体，或尚未授予媒体读取权限。" else "已加入 ${items.size} 个本机媒体"
             busy = false
         }
@@ -887,6 +1414,49 @@ private fun AddSmbPanel(
         if (granted) scanLocalMedia() else permissionLauncher.launch(permissions)
     }
 
+    fun saveLocalSourceName() {
+        val source = initialLocalSource ?: return
+        onSourceAdded(source.copy(name = name.ifBlank { source.name }, detail = source.detail))
+        status = "已保存“${name.ifBlank { source.name }}”。"
+    }
+
+    fun rescanInitialLocalSource() {
+        val source = initialLocalSource ?: return
+        val baseUri = source.baseUri.orEmpty()
+        val treeUri = baseUri.takeIf { it.startsWith("content://") && it.contains("/tree/") }
+            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (treeUri == null) {
+            requestOrScanLocal()
+            return
+        }
+        scope.launch {
+            busy = true
+            val sourceName = name.ifBlank { source.name.ifBlank { LocalMediaRepository.treeSourceName(treeUri) } }
+            status = "正在重新扫描本机目录：$sourceName"
+            onSourceAdded(
+                source.copy(
+                    name = sourceName,
+                    health = SourceHealth.SYNCING,
+                    detail = "正在扫描本机目录"
+                )
+            )
+            val items = localRepository.scanTree(treeUri, source.id, sourceName)
+            onMediaScanCompleted(source.id, items)
+            publishLocalSource(
+                items,
+                sourceIdOverride = source.id,
+                sourceNameOverride = sourceName,
+                baseUriOverride = treeUri.toString()
+            )
+            status = if (items.isEmpty()) {
+                "该目录及子文件夹中未发现支持的图片或视频。"
+            } else {
+                "已刷新 ${items.size} 个本机目录媒体"
+            }
+            busy = false
+        }
+    }
+
     val folderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching {
@@ -897,11 +1467,30 @@ private fun AddSmbPanel(
             }
             scope.launch {
                 busy = true
-                status = "正在递归扫描本地文件夹"
-                val items = localRepository.scanTree(uri)
-                onMediaScanCompleted(LocalMediaRepository.LOCAL_TREE_SOURCE_ID, items)
-                publishLocalSource(items)
-                status = if (items.isEmpty()) "该文件夹及子文件夹中未发现支持的图片或视频。" else "已加入 ${items.size} 个本地文件夹媒体"
+                val sourceId = LocalMediaRepository.treeSourceId(uri)
+                val sourceName = name.ifBlank { LocalMediaRepository.treeSourceName(uri) }
+                status = "正在递归扫描本机目录：$sourceName"
+                onSourceAdded(
+                    MediaSource(
+                        id = sourceId,
+                        type = SourceType.LOCAL,
+                        name = sourceName,
+                        baseUri = uri.toString(),
+                        credentialsRef = "persistable-uri",
+                        enabled = true,
+                        health = SourceHealth.SYNCING,
+                        detail = "正在扫描本机目录"
+                    )
+                )
+                val items = localRepository.scanTree(uri, sourceId, sourceName)
+                onMediaScanCompleted(sourceId, items)
+                publishLocalSource(
+                    items,
+                    sourceIdOverride = sourceId,
+                    sourceNameOverride = sourceName,
+                    baseUriOverride = uri.toString()
+                )
+                status = if (items.isEmpty()) "该目录及子文件夹中未发现支持的图片或视频。" else "已加入 ${items.size} 个本机目录媒体"
                 busy = false
             }
         }
@@ -1001,6 +1590,7 @@ private fun AddSmbPanel(
                     val type = currentSourceType()
                     Text(
                         text = when (type) {
+                            SourceType.LOCAL -> "添加本机目录"
                             SourceType.WEBDAV -> "添加 WebDAV"
                             SourceType.JELLYFIN -> "添加 Jellyfin"
                             SourceType.EMBY -> "添加 Emby"
@@ -1011,6 +1601,7 @@ private fun AddSmbPanel(
                     )
                     Text(
                         text = when (type) {
+                            SourceType.LOCAL -> "支持扫描系统媒体库，或选择本机文件夹递归加入媒体库"
                             SourceType.WEBDAV -> "支持目录浏览、递归扫描、图片/GIF 预览和视频播放"
                             SourceType.JELLYFIN -> "支持登录、媒体库浏览、封面和直连播放"
                             SourceType.EMBY -> "支持 Emby 登录、媒体库浏览、封面和直连播放"
@@ -1033,7 +1624,11 @@ private fun AddSmbPanel(
                     selectedSourceType = it.name
                     entries = emptyList()
                     remoteEntries = emptyList()
+                    if (it == SourceType.LOCAL) {
+                        name = LocalMediaRepository.LOCAL_TREE_SOURCE_NAME
+                    }
                     status = when (it) {
+                        SourceType.LOCAL -> "选择扫描系统媒体库，或选择本机目录后自动递归扫描。"
                         SourceType.WEBDAV -> "填写 WebDAV 地址后可测试、浏览或保存扫描，支持 https:// 校验。"
                         SourceType.JELLYFIN -> "填写 Jellyfin 地址和用户名密码，或直接填写 API Key。"
                         SourceType.EMBY -> "填写 Emby 地址和用户名密码，或直接填写 API Key。"
@@ -1084,7 +1679,65 @@ private fun AddSmbPanel(
                 )
             }
 
-            if (currentSourceType() == SourceType.SMB) {
+            when (currentSourceType()) {
+                SourceType.LOCAL -> {
+                    SourceTextField("名称", name, { name = it })
+                    Text(
+                        text = "本机目录会通过系统文件夹选择器授权访问；授权后会保存为来源，递归扫描子文件夹中的图片和视频，并写入媒体库。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    initialLocalSource?.let { source ->
+                        StatusLine(source.baseUri.orEmpty().ifBlank { "系统媒体库来源" })
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                enabled = !busy,
+                                onClick = { saveLocalSourceName() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(7.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                            ) {
+                                Text("保存修改")
+                            }
+                            Button(
+                                enabled = !busy,
+                                onClick = { rescanInitialLocalSource() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(7.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                            ) {
+                                Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("重新扫描")
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            enabled = !busy,
+                            onClick = { requestOrScanLocal() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(7.dp),
+                            border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.72f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryOrange)
+                        ) {
+                            Text("扫描系统媒体库")
+                        }
+                        Button(
+                            enabled = !busy,
+                            onClick = { folderLauncher.launch(null) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(7.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                        ) {
+                            Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("选择本机目录")
+                        }
+                    }
+                }
+                SourceType.SMB -> {
             SourceTextField("名称", name, { name = it })
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SourceTextField("服务器地址", server, { server = it }, modifier = Modifier.weight(1f))
@@ -1191,7 +1844,8 @@ private fun AddSmbPanel(
                     Text("加入当前目录")
                 }
             }
-            } else {
+                }
+                else -> {
                 SourceTextField("名称", name, { name = it })
                 SourceTextField(
                     label = if (currentSourceType().isMediaServerType()) "${currentSourceType().remoteTypeLabel()} 地址" else "WebDAV 地址",
@@ -1289,6 +1943,7 @@ private fun AddSmbPanel(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("保存并扫描")
                 }
+            }
             }
 
             StatusLine(status = status)
@@ -1568,11 +2223,390 @@ private fun RemoteDirectoryEntries(
 }
 
 @Composable
+private fun LocalDirectoryEntries(
+    entries: List<RemoteEntry>,
+    highlightPath: String? = null,
+    onDirectoryClick: (RemoteEntry) -> Unit,
+    onMediaClick: (RemoteEntry) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("本机目录内容", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+        entries.forEach { entry ->
+            val highlighted = highlightPath?.equals(entry.path, ignoreCase = true) == true
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = entry.isDirectory || entry.isMediaEntry()) {
+                        if (entry.isDirectory) onDirectoryClick(entry) else onMediaClick(entry)
+                    },
+                shape = RoundedCornerShape(7.dp),
+                color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.66f),
+                border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = if (entry.isDirectory) Icons.Outlined.Folder else Icons.Outlined.InsertDriveFile,
+                        contentDescription = null,
+                        tint = if (entry.isDirectory) PrimaryAmber else TextMuted
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(entry.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text = when {
+                                highlighted -> "当前文件"
+                                entry.isDirectory -> "文件夹"
+                                entry.mimeType?.startsWith("image/", ignoreCase = true) == true || entry.name.isImageFileName() -> "图片 · ${(entry.size ?: 0L).toReadableSize()}"
+                                entry.mimeType?.startsWith("video/", ignoreCase = true) == true || entry.name.isVideoFileName() -> "视频 · ${(entry.size ?: 0L).toReadableSize()}"
+                                else -> (entry.size ?: 0L).toReadableSize()
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (entry.isDirectory) {
+                        Icon(Icons.Outlined.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceBrowserControls(
+    filter: SourceBrowserFilter,
+    sort: MediaSort,
+    ascending: Boolean,
+    layout: MediaLayout,
+    onFilter: (SourceBrowserFilter) -> Unit,
+    onSort: (MediaSort) -> Unit,
+    onLayout: (MediaLayout) -> Unit
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 2.dp)
+    ) {
+        items(SourceBrowserFilter.entries) { option ->
+            FilterChip(
+                selected = filter == option,
+                onClick = { onFilter(option) },
+                label = { Text(option.label) },
+                shape = RoundedCornerShape(7.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f),
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
+                    selectedLabelColor = PrimaryOrange
+                )
+            )
+        }
+        items(MediaSort.entries) { option ->
+            val active = sort == option
+            FilterChip(
+                selected = active,
+                onClick = { onSort(option) },
+                label = { Text(if (active) "${option.label}${if (ascending) "↑" else "↓"}" else option.label) },
+                shape = RoundedCornerShape(7.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f),
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+        items(MediaLayout.entries) { option ->
+            FilterChip(
+                selected = layout == option,
+                onClick = { onLayout(option) },
+                label = { Text(option.label) },
+                shape = RoundedCornerShape(7.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f),
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = SoftTeal.copy(alpha = 0.16f),
+                    selectedLabelColor = SoftTeal
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun SourceBrowserEntries(
+    entries: List<RemoteEntry>,
+    layout: MediaLayout,
+    highlightPath: String? = null,
+    itemFactory: (RemoteEntry) -> LibraryItem,
+    actionEnabled: Boolean,
+    actionUnsupportedMessage: String?,
+    onDirectoryClick: (RemoteEntry) -> Unit,
+    onMediaClick: (RemoteEntry) -> Unit,
+    onActionClick: (RemoteEntry) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("目录内容", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+        if (layout == MediaLayout.LIST) {
+            entries.forEach { entry ->
+                SourceBrowserEntryRow(
+                    entry = entry,
+                    previewItem = if (entry.isMediaEntry()) itemFactory(entry) else null,
+                    highlighted = highlightPath?.trim('/')?.equals(entry.path.trim('/'), ignoreCase = true) == true,
+                    actionEnabled = actionEnabled,
+                    actionUnsupportedMessage = actionUnsupportedMessage,
+                    onDirectoryClick = onDirectoryClick,
+                    onMediaClick = onMediaClick,
+                    onActionClick = onActionClick
+                )
+            }
+        } else {
+            val columns = if (layout == MediaLayout.SMALL) 3 else 2
+            entries.chunked(columns).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    row.forEach { entry ->
+                        SourceBrowserEntryCard(
+                            entry = entry,
+                            previewItem = if (entry.isMediaEntry()) itemFactory(entry) else null,
+                            compact = layout == MediaLayout.SMALL,
+                            highlighted = highlightPath?.trim('/')?.equals(entry.path.trim('/'), ignoreCase = true) == true,
+                            actionEnabled = actionEnabled,
+                            actionUnsupportedMessage = actionUnsupportedMessage,
+                            onDirectoryClick = onDirectoryClick,
+                            onMediaClick = onMediaClick,
+                            onActionClick = onActionClick,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(columns - row.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceBrowserEntryRow(
+    entry: RemoteEntry,
+    previewItem: LibraryItem?,
+    highlighted: Boolean,
+    actionEnabled: Boolean,
+    actionUnsupportedMessage: String?,
+    onDirectoryClick: (RemoteEntry) -> Unit,
+    onMediaClick: (RemoteEntry) -> Unit,
+    onActionClick: (RemoteEntry) -> Unit
+) {
+    val enabled = entry.isDirectory || entry.isMediaEntry()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) {
+                if (entry.isDirectory) onDirectoryClick(entry) else onMediaClick(entry)
+            },
+        shape = RoundedCornerShape(8.dp),
+        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            SourceBrowserEntryPreview(
+                entry = entry,
+                previewItem = previewItem,
+                modifier = Modifier
+                    .width(64.dp)
+                    .aspectRatio(1.28f)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(entry.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(entry.browserSubtitle(highlighted), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (entry.isDirectory) {
+                Icon(Icons.Outlined.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(
+                enabled = actionEnabled || actionUnsupportedMessage != null,
+                onClick = { onActionClick(entry) }
+            ) {
+                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceBrowserEntryCard(
+    entry: RemoteEntry,
+    previewItem: LibraryItem?,
+    compact: Boolean,
+    highlighted: Boolean,
+    actionEnabled: Boolean,
+    actionUnsupportedMessage: String?,
+    onDirectoryClick: (RemoteEntry) -> Unit,
+    onMediaClick: (RemoteEntry) -> Unit,
+    onActionClick: (RemoteEntry) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val enabled = entry.isDirectory || entry.isMediaEntry()
+    Surface(
+        modifier = modifier.clickable(enabled = enabled) {
+            if (entry.isDirectory) onDirectoryClick(entry) else onMediaClick(entry)
+        },
+        shape = RoundedCornerShape(8.dp),
+        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+    ) {
+        Column(
+            modifier = Modifier.padding(if (compact) 8.dp else 10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            SourceBrowserEntryPreview(
+                entry = entry,
+                previewItem = previewItem,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(if (compact) 1.12f else 1.35f)
+            )
+            Text(entry.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
+            if (!compact) {
+                Text(entry.browserSubtitle(highlighted), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(
+                enabled = actionEnabled || actionUnsupportedMessage != null,
+                onClick = { onActionClick(entry) },
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceBrowserEntryPreview(
+    entry: RemoteEntry,
+    previewItem: LibraryItem?,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(7.dp)
+    Box(
+        modifier = modifier.clip(shape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (previewItem != null) {
+            FilePreviewThumb(item = previewItem, modifier = Modifier.fillMaxSize())
+        } else {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.70f),
+                shape = shape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = when {
+                            entry.isDirectory -> Icons.Outlined.Folder
+                            entry.name.isImageFileName() -> Icons.Outlined.Image
+                            entry.name.isVideoFileName() -> Icons.Outlined.Movie
+                            else -> Icons.Outlined.InsertDriveFile
+                        },
+                        contentDescription = null,
+                        tint = when {
+                            entry.isDirectory -> PrimaryAmber
+                            entry.name.isImageFileName() -> SoftTeal
+                            entry.name.isVideoFileName() -> PrimaryOrange
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceFileActionDialog(
+    entry: RemoteEntry,
+    supportsWriteActions: Boolean,
+    allowDownload: Boolean,
+    unsupportedMessage: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (FileAction, String) -> Unit
+) {
+    var pendingAction by rememberSaveable(entry.path) { mutableStateOf<FileAction?>(null) }
+    var value by rememberSaveable(entry.path, pendingAction?.name) { mutableStateOf("") }
+    val action = pendingAction
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (action == null) "文件管理" else action.label) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(entry.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (!supportsWriteActions && !allowDownload) {
+                    Text(unsupportedMessage ?: "该来源暂不支持文件管理操作。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else if (action == null) {
+                    FileAction.entries.forEach { option ->
+                        val enabled = when (option) {
+                            FileAction.DELETE, FileAction.RENAME, FileAction.MOVE -> supportsWriteActions
+                            FileAction.DOWNLOAD -> allowDownload
+                        }
+                        if (!enabled) return@forEach
+                        Text(
+                            text = option.label,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (option == FileAction.DELETE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { pendingAction = option }
+                                .padding(vertical = 8.dp)
+                        )
+                    }
+                } else if (action == FileAction.DELETE || action == FileAction.DOWNLOAD) {
+                    Text(if (action == FileAction.DELETE) "确定删除“${entry.name}”吗？" else "下载到应用下载目录。")
+                } else {
+                    TextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        label = { Text(if (action == FileAction.RENAME) "新名称" else "目标文件夹路径") },
+                        singleLine = true,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (action != null) {
+                TextButton(onClick = { onSubmit(action, value) }) {
+                    Text(if (action == FileAction.DELETE) "删除" else "确定")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { if (action == null) onDismiss() else pendingAction = null }) {
+                Text(if (action == null) "关闭" else "返回")
+            }
+        }
+    )
+}
+
+@Composable
 private fun SourceTypeSelector(
     selected: SourceType,
     onSelected: (SourceType) -> Unit
 ) {
     val options = listOf(
+        SourceTile("本机目录", "手机/平板", Icons.Outlined.Folder, SoftTeal, SourceType.LOCAL),
         SourceTile("SMB / NAS", "文件共享", Icons.Outlined.Storage, ElectricBlue, SourceType.SMB),
         SourceTile("WebDAV", "云盘/NAS", Icons.Outlined.Cloud, PrimaryOrange, SourceType.WEBDAV),
         SourceTile("Jellyfin", "媒体服务器", Icons.Outlined.Dns, PrimaryAmber, SourceType.JELLYFIN),
@@ -1676,6 +2710,7 @@ private fun SourceTextField(
 @Composable
 private fun SourceTypeRail(contentPadding: PaddingValues = PaddingValues(horizontal = 0.dp)) {
     val types = listOf(
+        SourceTile("本机目录", "系统媒体/文件夹", Icons.Outlined.Folder, SoftTeal),
         SourceTile("SMB / NAS", "已接入 SMBJ", Icons.Outlined.Storage, ElectricBlue),
         SourceTile("WebDAV", "已支持浏览/扫描", Icons.Outlined.Cloud, PrimaryOrange),
         SourceTile("Jellyfin", "已支持登录/直连", Icons.Outlined.Dns, PrimaryAmber),
@@ -1757,6 +2792,8 @@ private data class SourceTile(
     val type: SourceType = SourceType.SMB
 )
 
+private const val INTERNAL_LOCAL_SOURCE_ID = "local"
+
 private fun SourceType.isRemoteConfigType(): Boolean =
     this == SourceType.WEBDAV || isMediaServerType()
 
@@ -1795,6 +2832,172 @@ private fun MediaSource.toEditableRemoteConfig(): RemoteSourceConfig? {
     )
 }
 
+private fun queryLocalDocumentChildren(
+    context: android.content.Context,
+    treeUri: Uri,
+    documentId: String
+): List<RemoteEntry> {
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
+    val entries = mutableListOf<RemoteEntry>()
+    context.contentResolver.query(
+        childrenUri,
+        arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+        ),
+        null,
+        null,
+        null
+    )?.use { cursor ->
+        val idIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+        val nameIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+        val mimeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+        val sizeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+        val modifiedIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+        fun stringAt(index: Int): String =
+            if (index >= 0 && !cursor.isNull(index)) cursor.getString(index).orEmpty() else ""
+        fun longAt(index: Int): Long? =
+            if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
+
+        while (cursor.moveToNext()) {
+            val childDocumentId = stringAt(idIndex)
+            if (childDocumentId.isBlank()) continue
+            val name = stringAt(nameIndex).ifBlank { childDocumentId.substringAfterLast('/') }
+            val mimeType = stringAt(mimeIndex)
+            entries += RemoteEntry(
+                id = childDocumentId,
+                name = name,
+                path = childDocumentId,
+                isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR,
+                size = longAt(sizeIndex),
+                modifiedAt = longAt(modifiedIndex),
+                mimeType = mimeType.ifBlank { null }
+            )
+        }
+    }
+    return entries.sortedWith(
+        compareByDescending<RemoteEntry> { it.isDirectory }
+            .thenByDescending { it.isMediaEntry() }
+            .thenBy { it.name.lowercase(Locale.US) }
+    )
+}
+
+private fun performLocalDocumentAction(
+    context: android.content.Context,
+    treeUri: Uri,
+    currentDocumentId: String,
+    entry: RemoteEntry,
+    action: FileAction,
+    value: String
+): String {
+    val resolver = context.contentResolver
+    val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, entry.path)
+    return runCatching {
+        when (action) {
+            FileAction.DELETE -> {
+                DocumentsContract.deleteDocument(resolver, documentUri)
+                "已删除 ${entry.name}"
+            }
+            FileAction.RENAME -> {
+                require(value.isNotBlank()) { "请输入新名称" }
+                DocumentsContract.renameDocument(resolver, documentUri, value.trim())
+                "已重命名为 ${value.trim()}"
+            }
+            FileAction.MOVE -> {
+                require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) { "当前 Android 版本不支持移动 SAF 文件" }
+                val targetDocumentId = resolveLocalTargetDirectory(context, treeUri, currentDocumentId, value)
+                require(!targetDocumentId.isNullOrBlank()) { "未找到目标文件夹，请输入当前目录下的文件夹名或完整 documentId" }
+                val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocumentId)
+                val targetParentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, targetDocumentId)
+                DocumentsContract.moveDocument(resolver, documentUri, parentUri, targetParentUri)
+                "已移动到 $value"
+            }
+            FileAction.DOWNLOAD -> {
+                require(!entry.isDirectory) { "文件夹暂不支持下载" }
+                val downloads = File(context.getExternalFilesDir(null), "downloads").apply { mkdirs() }
+                val target = File(downloads, entry.name.ifBlank { "local-download" })
+                resolver.openInputStream(documentUri).use { input ->
+                    requireNotNull(input) { "无法读取文件" }
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                "已下载到 ${target.absolutePath}"
+            }
+        }
+    }.getOrElse { "文件操作失败：${it.message ?: it.javaClass.simpleName}" }
+}
+
+private fun resolveLocalTargetDirectory(
+    context: android.content.Context,
+    treeUri: Uri,
+    currentDocumentId: String,
+    target: String
+): String? {
+    val trimmed = target.trim().trim('/', '\\')
+    if (trimmed.isBlank()) return null
+    if (trimmed.contains(":")) return trimmed
+    var parent = currentDocumentId
+    trimmed.split('/', '\\').filter { it.isNotBlank() }.forEach { segment ->
+        val next = queryLocalDocumentChildren(context, treeUri, parent)
+            .firstOrNull { it.isDirectory && (it.name.equals(segment, ignoreCase = true) || it.path.equals(segment, ignoreCase = true)) }
+            ?.path
+            ?: return null
+        parent = next
+    }
+    return parent
+}
+
+private fun MediaSource.toLocalLibraryItem(treeUri: Uri, entry: RemoteEntry): LibraryItem {
+    val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, entry.path)
+    val extension = entry.name.substringAfterLast('.', "").uppercase(Locale.US)
+    val isImage = entry.name.isImageFileName() ||
+        entry.mimeType?.startsWith("image/", ignoreCase = true) == true
+    val mediaType = if (isImage) "图片" else "视频"
+    val size = entry.size ?: 0L
+    return LibraryItem(
+        id = "$id-${documentUri}".hashCode().absoluteValue.toString(),
+        sourceId = id,
+        path = entry.path,
+        modifiedAt = entry.modifiedAt ?: 0L,
+        itemType = if (isImage) LibraryItemType.IMAGE else LibraryItemType.VIDEO_FILE,
+        title = entry.name.substringBeforeLast('.').replace('.', ' ').replace('_', ' ').ifBlank { entry.name },
+        originalTitle = entry.name,
+        year = Regex("""(?:19|20)\d{2}""").find(entry.name)?.value?.toIntOrNull(),
+        durationLabel = "本机$mediaType",
+        posterUrl = null,
+        backdropUrl = null,
+        overview = "本机目录媒体，大小 ${size.toReadableSize()}，类型 ${entry.mimeType ?: extension.ifBlank { mediaType }}。",
+        rating = "-",
+        progress = 0f,
+        resolution = mediaType,
+        videoCodec = extension.ifBlank { mediaType.uppercase(Locale.US) },
+        audioCodec = if (isImage) "图片" else "原始音轨",
+        hdr = null,
+        sourceName = name,
+        streamUrl = documentUri.toString(),
+        genres = listOf("本机目录", mediaType, extension)
+    )
+}
+
+private fun List<RemoteEntry>.filterForSourceBrowser(filter: SourceBrowserFilter): List<RemoteEntry> =
+    when (filter) {
+        SourceBrowserFilter.ALL -> this
+        SourceBrowserFilter.FOLDERS -> filter { it.isDirectory }
+        SourceBrowserFilter.VIDEOS -> filter { !it.isDirectory && (it.name.isVideoFileName() || it.mimeType?.startsWith("video/", ignoreCase = true) == true) }
+        SourceBrowserFilter.IMAGES -> filter { !it.isDirectory && (it.name.isImageFileName() || it.mimeType?.startsWith("image/", ignoreCase = true) == true) }
+        SourceBrowserFilter.FILES -> filter { !it.isDirectory }
+    }
+
+private fun RemoteEntry.browserSubtitle(highlighted: Boolean): String = when {
+    highlighted -> "当前文件"
+    isDirectory -> "文件夹"
+    name.isImageFileName() || mimeType?.startsWith("image/", ignoreCase = true) == true -> "图片 · ${(size ?: 0L).toReadableSize()}"
+    name.isVideoFileName() || mimeType?.startsWith("video/", ignoreCase = true) == true -> "视频 · ${(size ?: 0L).toReadableSize()}"
+    else -> size?.toReadableSize() ?: "未知大小"
+}
+
 private fun RemoteEntry.isMediaEntry(): Boolean =
     name.isImageFileName() ||
         name.isVideoFileName() ||
@@ -1817,6 +3020,11 @@ private fun String.parentSmbPath(): String {
 private fun String.parentRemotePath(): String {
     val normalized = trim().trim('/')
     return normalized.substringBeforeLast("/", missingDelimiterValue = "")
+}
+
+private fun String.parentDocumentId(rootDocumentId: String): String {
+    val normalized = trim()
+    return normalized.substringBeforeLast("/", missingDelimiterValue = rootDocumentId).ifBlank { rootDocumentId }
 }
 
 
