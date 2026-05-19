@@ -1,5 +1,10 @@
 ﻿package com.outfuseplayer.ui.components
 
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
+import android.net.Uri
+import android.os.Build
+import android.widget.ImageView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.background
@@ -50,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import com.outfuseplayer.data.ThumbnailRepository
 import com.outfuseplayer.data.UserSeries
@@ -62,6 +68,7 @@ import com.outfuseplayer.ui.theme.SoftTeal
 import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
+import java.nio.ByteBuffer
 
 @Composable
 fun SectionHeader(
@@ -215,6 +222,10 @@ fun FilePreviewThumb(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    if (item.isGifFile() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        GifPreviewThumb(item = item, modifier = modifier)
+        return
+    }
     var thumbnail by remember(item.id, item.streamUrl) { mutableStateOf<android.graphics.Bitmap?>(null) }
 
     LaunchedEffect(item.id, item.streamUrl) {
@@ -273,6 +284,85 @@ fun FilePreviewThumb(
         }
     }
 }
+
+@Composable
+private fun GifPreviewThumb(
+    item: LibraryItem,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val uri = remember(item.streamUrl) { item.streamUrl?.let { runCatching { Uri.parse(it) }.getOrNull() } }
+    var bytes by remember(item.id, item.streamUrl) { mutableStateOf<ByteArray?>(null) }
+    LaunchedEffect(item.id, item.streamUrl) {
+        bytes = if (uri?.scheme.equals("content", ignoreCase = true) || uri?.scheme.equals("file", ignoreCase = true)) {
+            null
+        } else {
+            ThumbnailRepository.imageBytes(context, item, maxBytes = 128 * 1024 * 1024)
+        }
+    }
+    val data = bytes
+    if (data == null && uri == null) {
+        GifFallback(modifier)
+        return
+    }
+    val drawable = remember(context, data, uri) {
+        runCatching {
+            val source = when {
+                data != null -> ImageDecoder.createSource(ByteBuffer.wrap(data))
+                uri != null -> ImageDecoder.createSource(context.contentResolver, uri)
+                else -> null
+            }
+            source?.let { decodeDrawableMaxEdge(it, maxEdge = 640) }
+        }.getOrNull()
+    }
+    if (drawable == null) {
+        GifFallback(modifier)
+        return
+    }
+    AndroidView(
+        modifier = modifier,
+        factory = { viewContext ->
+            ImageView(viewContext).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(android.graphics.Color.BLACK)
+            }
+        },
+        update = { imageView ->
+            if (imageView.drawable !== drawable) {
+                imageView.setImageDrawable(drawable)
+                (drawable as? AnimatedImageDrawable)?.start()
+            }
+        }
+    )
+}
+
+private fun decodeDrawableMaxEdge(source: ImageDecoder.Source, maxEdge: Int) =
+    ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
+        val width = info.size.width
+        val height = info.size.height
+        val largest = maxOf(width, height)
+        if (largest > maxEdge && width > 0 && height > 0) {
+            val scale = maxEdge.toFloat() / largest.toFloat()
+            decoder.setTargetSize(
+                (width * scale).toInt().coerceAtLeast(1),
+                (height * scale).toInt().coerceAtLeast(1)
+            )
+        }
+    }
+
+@Composable
+private fun GifFallback(modifier: Modifier) {
+    Box(
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        Text("GIF", style = MaterialTheme.typography.titleMedium, color = SoftTeal)
+    }
+}
+
+private fun LibraryItem.isGifFile(): Boolean =
+    itemType == LibraryItemType.IMAGE &&
+        (originalTitle ?: path).substringBefore('?').substringAfterLast('.', "").equals("gif", ignoreCase = true)
 
 @Composable
 fun PosterImage(

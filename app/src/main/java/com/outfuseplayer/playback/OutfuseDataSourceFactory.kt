@@ -21,7 +21,13 @@ import com.hierynomus.smbj.share.DiskShare
 import com.outfuseplayer.data.smb.SmbConfig
 import com.outfuseplayer.data.smb.SmbCredentialRegistry
 import com.outfuseplayer.data.smb.toRemotePath
+import com.outfuseplayer.data.remote.RemoteSourceRegistry
+import com.outfuseplayer.data.remote.WebDavRepository
+import com.outfuseplayer.data.remote.WebDavUriScheme
 import java.util.EnumSet
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.math.min
 
 class OutfuseDataSourceFactory(context: Context) : DataSource.Factory {
@@ -41,10 +47,10 @@ private class OutfuseDataSource(context: Context) : DataSource {
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val next = if (dataSpec.uri.scheme.equals("smb", ignoreCase = true)) {
-            SmbMediaDataSource()
-        } else {
-            defaultFactory.createDataSource()
+        val next = when {
+            dataSpec.uri.scheme.equals("smb", ignoreCase = true) -> SmbMediaDataSource()
+            dataSpec.uri.scheme.equals(WebDavUriScheme, ignoreCase = true) -> WebDavMediaDataSource()
+            else -> defaultFactory.createDataSource()
         }
         listeners.forEach { next.addTransferListener(it) }
         delegate = next
@@ -61,6 +67,75 @@ private class OutfuseDataSource(context: Context) : DataSource {
     override fun close() {
         delegate?.close()
         delegate = null
+    }
+}
+
+private class WebDavMediaDataSource : BaseDataSource(true) {
+    private var opened = false
+    private var uri: Uri? = null
+    private var connection: HttpURLConnection? = null
+    private var stream: InputStream? = null
+    private var remaining = C.LENGTH_UNSET.toLong()
+
+    override fun open(dataSpec: DataSpec): Long {
+        transferInitializing(dataSpec)
+        uri = dataSpec.uri
+        val parsedUri = requireNotNull(uri)
+        val config = RemoteSourceRegistry.find(parsedUri) ?: error("缺少 WebDAV 凭据，请从来源页重新连接")
+        val remotePath = parsedUri.pathSegments.joinToString("/")
+        val streamUrl = WebDavRepository().streamUrl(config, remotePath)
+        val nextConnection = URL(streamUrl).openConnection() as HttpURLConnection
+        WebDavRepository().streamHeaders(config).forEach { (key, value) ->
+            nextConnection.setRequestProperty(key, value)
+        }
+        nextConnection.setRequestProperty("User-Agent", "outfuse/0.1 Android")
+        nextConnection.setRequestProperty("Accept-Encoding", "identity")
+        nextConnection.setRequestProperty("Connection", "keep-alive")
+        nextConnection.connectTimeout = 15_000
+        nextConnection.readTimeout = 45_000
+        if (dataSpec.position > 0 || dataSpec.length != C.LENGTH_UNSET.toLong()) {
+            val end = if (dataSpec.length == C.LENGTH_UNSET.toLong()) "" else (dataSpec.position + dataSpec.length - 1).toString()
+            nextConnection.setRequestProperty("Range", "bytes=${dataSpec.position}-$end")
+        }
+        val code = nextConnection.responseCode
+        if (code !in listOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_PARTIAL)) {
+            error("WebDAV HTTP $code")
+        }
+        connection = nextConnection
+        stream = nextConnection.inputStream
+        remaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
+            dataSpec.length
+        } else {
+            nextConnection.contentLengthLong.takeIf { it >= 0 } ?: C.LENGTH_UNSET.toLong()
+        }
+        opened = true
+        transferStarted(dataSpec)
+        return remaining
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (length == 0) return 0
+        if (remaining == 0L) return C.RESULT_END_OF_INPUT
+        val targetLength = if (remaining == C.LENGTH_UNSET.toLong()) length else min(length.toLong(), remaining).toInt()
+        val bytesRead = stream?.read(buffer, offset, targetLength) ?: C.RESULT_END_OF_INPUT
+        if (bytesRead <= 0) return C.RESULT_END_OF_INPUT
+        if (remaining != C.LENGTH_UNSET.toLong()) remaining -= bytesRead
+        bytesTransferred(bytesRead)
+        return bytesRead
+    }
+
+    override fun getUri(): Uri? = uri
+
+    override fun close() {
+        uri = null
+        runCatching { stream?.close() }
+        connection?.disconnect()
+        stream = null
+        connection = null
+        if (opened) {
+            opened = false
+            transferEnded()
+        }
     }
 }
 

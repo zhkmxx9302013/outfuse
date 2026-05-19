@@ -59,6 +59,7 @@ data class SmbScanProgress(
     val videoCount: Int,
     val imageCount: Int,
     val skippedDirectories: Int,
+    val unchangedDirectories: Int = 0,
     val completed: Boolean = false,
     val message: String = ""
 )
@@ -70,7 +71,14 @@ data class SmbScanSummary(
     val videoCount: Int,
     val imageCount: Int,
     val scannedDirectories: Int,
-    val skippedDirectories: Int
+    val skippedDirectories: Int,
+    val unchangedDirectories: Int = 0
+)
+
+data class SmbSkippedDirectoryStats(
+    val mediaCount: Int = 0,
+    val videoCount: Int = 0,
+    val imageCount: Int = 0
 )
 
 object SmbCredentialRegistry {

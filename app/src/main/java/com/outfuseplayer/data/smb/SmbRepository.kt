@@ -11,11 +11,13 @@ import com.hierynomus.smbj.auth.AuthenticationContext
 import com.hierynomus.smbj.share.DiskShare
 import com.outfuseplayer.model.LibraryItem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.EnumSet
 import kotlin.math.min
 
@@ -101,10 +103,14 @@ class SmbRepository {
         config: SmbConfig,
         maxDepth: Int = Int.MAX_VALUE,
         batchSize: Int = 160,
+        knownDirectorySignatures: Map<String, String> = emptyMap(),
         onProgress: suspend (SmbScanProgress) -> Unit,
-        onBatch: suspend (List<LibraryItem>) -> Unit
+        onBatch: suspend (List<LibraryItem>) -> Unit,
+        onDirectoryFingerprint: suspend (String, String) -> Unit = { _, _ -> },
+        onSkippedDirectory: suspend (String) -> SmbSkippedDirectoryStats = { SmbSkippedDirectoryStats() }
     ): SmbActionResult<SmbScanSummary> {
         var skippedDirectories = 0
+        var unchangedDirectories = 0
         var scannedDirectories = 0
         var mediaFound = 0
         var videoCount = 0
@@ -135,6 +141,7 @@ class SmbRepository {
                     videoCount = videoCount,
                     imageCount = imageCount,
                     skippedDirectories = skippedDirectories,
+                    unchangedDirectories = unchangedDirectories,
                     message = "后台扫描中"
                 )
             )
@@ -153,18 +160,36 @@ class SmbRepository {
                     if (depth > maxDepth) continue
                     scannedDirectories++
 
-                    val entries = try {
+                    var listed = true
+                    val directoryEntries = try {
                         share.list(currentPath)
-                            .asSequence()
-                            .filterNot { it.fileName == "." || it.fileName == ".." }
-                            .map { it.toEntry(currentPath) }
-                            .toList()
                     } catch (_: Throwable) {
+                        listed = false
                         skippedDirectories++
                         emptyList()
                     }
 
-                    entries.forEach { entry ->
+                    if (!listed) {
+                        report(currentPath, pending.size)
+                        continue
+                    }
+
+                    val signature = directoryEntries.directorySignature()
+                    val unchanged = knownDirectorySignatures[currentPath] == signature
+                    onDirectoryFingerprint(currentPath, signature)
+                    if (unchanged) {
+                        val cachedStats = onSkippedDirectory(currentPath)
+                        mediaFound += cachedStats.mediaCount
+                        videoCount += cachedStats.videoCount
+                        imageCount += cachedStats.imageCount
+                        unchangedDirectories++
+                        report(currentPath, pending.size)
+                        continue
+                    }
+
+                    directoryEntries.forEach { directoryEntry ->
+                        if (directoryEntry.fileName == "." || directoryEntry.fileName == "..") return@forEach
+                        val entry = directoryEntry.toEntry(currentPath)
                         when {
                             entry.isDirectory -> pending += entry.path to depth + 1
                             entry.isMedia -> {
@@ -189,7 +214,8 @@ class SmbRepository {
                 videoCount = videoCount,
                 imageCount = imageCount,
                 scannedDirectories = scannedDirectories,
-                skippedDirectories = skippedDirectories
+                skippedDirectories = skippedDirectories,
+                unchangedDirectories = unchangedDirectories
             )
             val finalPath = if (config.path.isBlank()) "/" else config.path
             onProgress(
@@ -203,17 +229,20 @@ class SmbRepository {
                     videoCount = videoCount,
                     imageCount = imageCount,
                     skippedDirectories = skippedDirectories,
+                    unchangedDirectories = unchangedDirectories,
                     completed = true,
                     message = "扫描完成"
                 )
             )
             val skippedHint = if (summary.skippedDirectories > 0) "，跳过 ${summary.skippedDirectories} 个不可访问目录" else ""
+            val unchangedHint = if (summary.unchangedDirectories > 0) "，跳过 ${summary.unchangedDirectories} 个未变化目录" else ""
             SmbActionResult(
                 true,
-                "扫描完成：${summary.videoCount} 个视频、${summary.imageCount} 张图片$skippedHint",
+                "增量扫描完成：${summary.videoCount} 个视频、${summary.imageCount} 张图片$skippedHint$unchangedHint",
                 summary
             )
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             SmbActionResult(false, error.toFriendlyMessage())
         }
     }
@@ -485,6 +514,26 @@ class SmbRepository {
             size = endOfFile,
             modifiedAt = lastWriteTime?.toEpochMillis() ?: 0L
         )
+    }
+
+    private fun List<FileIdBothDirectoryInformation>.directorySignature(): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        forEach { entry ->
+            if (entry.fileName == "." || entry.fileName == "..") return@forEach
+            val isDirectory = (entry.fileAttributes and FileAttributes.FILE_ATTRIBUTE_DIRECTORY.value) != 0L
+            digest.update((if (isDirectory) 1 else 0).toByte())
+            digest.updateText(entry.fileName)
+            digest.updateText(entry.endOfFile.toString())
+            digest.updateText((entry.lastWriteTime?.toEpochMillis() ?: 0L).toString())
+            digest.update((if (entry.fileName.isVideoFileName() || entry.fileName.isImageFileName()) 1 else 0).toByte())
+        }
+        val digestBytes = digest.digest()
+        return digestBytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun MessageDigest.updateText(value: String) {
+        update(value.toByteArray(Charsets.UTF_8))
+        update(0.toByte())
     }
 
     private fun Throwable.toFriendlyMessage(): String {

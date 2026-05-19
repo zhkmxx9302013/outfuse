@@ -86,6 +86,7 @@ class NetworkDiscoveryRepository(context: Context) {
         serviceType.contains("_webdavs", ignoreCase = true) -> "WebDAVS"
         serviceType.contains("_webdav", ignoreCase = true) -> "WebDAV"
         serviceType.contains("_jellyfin", ignoreCase = true) -> "Jellyfin"
+        serviceType.contains("_emby", ignoreCase = true) -> "Emby"
         serviceType.contains("_http", ignoreCase = true) -> "HTTP"
         serviceType.contains("_https", ignoreCase = true) -> "HTTPS"
         else -> serviceType.trim('.')
@@ -97,6 +98,8 @@ class NetworkDiscoveryRepository(context: Context) {
             "_webdav._tcp.",
             "_webdavs._tcp.",
             "_jellyfin._tcp.",
+            "_emby._tcp.",
+            "_emby-server._tcp.",
             "_http._tcp.",
             "_https._tcp."
         )

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Movie
@@ -41,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,9 +58,6 @@ import com.outfuseplayer.ui.fileExtension
 import com.outfuseplayer.ui.isImageMedia
 import com.outfuseplayer.ui.isVideoMedia
 import com.outfuseplayer.ui.theme.PrimaryOrange
-import com.outfuseplayer.ui.theme.Surface2
-import com.outfuseplayer.ui.theme.TextMuted
-import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import java.util.Calendar
 import java.util.Locale
 
@@ -68,21 +67,38 @@ private enum class SearchMediaFilter(val label: String) {
     IMAGE("图片")
 }
 
+private object SearchScreenMemory {
+    var query: String = ""
+    var filtersVisible: Boolean = false
+    var mediaFilterName: String = SearchMediaFilter.ALL.name
+    var formatFilter: String = "全部"
+    var fromYear: String = ""
+    var toYear: String = ""
+    var visibleCount: Int = 0
+    var filterKey: String = ""
+    var firstVisibleItemIndex: Int = 0
+    var firstVisibleItemScrollOffset: Int = 0
+}
+
 @Composable
 fun SearchScreen(
     items: List<LibraryItem>,
     expanded: Boolean,
     onItemClick: (LibraryItem) -> Unit
 ) {
-    var query by rememberSaveable { mutableStateOf("") }
-    var filtersVisible by rememberSaveable { mutableStateOf(false) }
-    var mediaFilterName by rememberSaveable { mutableStateOf(SearchMediaFilter.ALL.name) }
-    var formatFilter by rememberSaveable { mutableStateOf("全部") }
-    var fromYear by rememberSaveable { mutableStateOf("") }
-    var toYear by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf(SearchScreenMemory.query) }
+    var filtersVisible by rememberSaveable { mutableStateOf(SearchScreenMemory.filtersVisible) }
+    var mediaFilterName by rememberSaveable { mutableStateOf(SearchScreenMemory.mediaFilterName) }
+    var formatFilter by rememberSaveable { mutableStateOf(SearchScreenMemory.formatFilter) }
+    var fromYear by rememberSaveable { mutableStateOf(SearchScreenMemory.fromYear) }
+    var toYear by rememberSaveable { mutableStateOf(SearchScreenMemory.toYear) }
     val normalized = query.trim()
     val pageSize = if (expanded) 30 else 18
-    var visibleCount by rememberSaveable { mutableStateOf(pageSize) }
+    var visibleCount by rememberSaveable { mutableStateOf(SearchScreenMemory.visibleCount.takeIf { it > 0 } ?: pageSize) }
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = SearchScreenMemory.firstVisibleItemIndex,
+        initialFirstVisibleItemScrollOffset = SearchScreenMemory.firstVisibleItemScrollOffset
+    )
     val mediaFilter = SearchMediaFilter.valueOf(mediaFilterName)
     val formatOptions = items
         .map { it.fileExtension().uppercase(Locale.US) }
@@ -113,9 +129,35 @@ fun SearchScreen(
         matchesMedia && matchesFormat && matchesFrom && matchesTo
     }
     val visibleResults = results.take(visibleCount)
+    val filterKey = listOf(normalized, mediaFilterName, formatFilter, fromYear, toYear).joinToString("|")
 
-    LaunchedEffect(normalized, mediaFilterName, formatFilter, fromYear, toYear) {
-        visibleCount = pageSize
+    LaunchedEffect(filterKey, pageSize) {
+        if (SearchScreenMemory.filterKey.isNotBlank() && SearchScreenMemory.filterKey != filterKey) {
+            visibleCount = pageSize
+            SearchScreenMemory.firstVisibleItemIndex = 0
+            SearchScreenMemory.firstVisibleItemScrollOffset = 0
+            listState.scrollToItem(0)
+        }
+        SearchScreenMemory.filterKey = filterKey
+    }
+
+    LaunchedEffect(query, filtersVisible, mediaFilterName, formatFilter, fromYear, toYear, visibleCount) {
+        SearchScreenMemory.query = query
+        SearchScreenMemory.filtersVisible = filtersVisible
+        SearchScreenMemory.mediaFilterName = mediaFilterName
+        SearchScreenMemory.formatFilter = formatFilter
+        SearchScreenMemory.fromYear = fromYear
+        SearchScreenMemory.toYear = toYear
+        SearchScreenMemory.visibleCount = visibleCount
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }.collect { (index, offset) ->
+            SearchScreenMemory.firstVisibleItemIndex = index
+            SearchScreenMemory.firstVisibleItemScrollOffset = offset
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -136,23 +178,25 @@ fun SearchScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(8.dp),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = OutfuseSurface,
-                    unfocusedContainerColor = OutfuseSurface,
-                    disabledContainerColor = OutfuseSurface,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent,
                     cursorColor = PrimaryOrange,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedPlaceholderColor = TextMuted,
-                    unfocusedPlaceholderColor = TextMuted
+                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    focusedLeadingIconColor = PrimaryOrange,
+                    unfocusedLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             )
             IconButton(onClick = { filtersVisible = !filtersVisible }) {
                 Icon(
                     Icons.Outlined.Tune,
                     contentDescription = "筛选",
-                    tint = if (filtersVisible) PrimaryOrange else Color.White
+                    tint = if (filtersVisible) PrimaryOrange else MaterialTheme.colorScheme.onBackground
                 )
             }
         }
@@ -177,6 +221,7 @@ fun SearchScreen(
             SearchEmptyState(expanded = expanded)
         } else {
             LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(
                     horizontal = if (expanded) 32.dp else 20.dp,
                     vertical = 12.dp
@@ -187,7 +232,7 @@ fun SearchScreen(
                     Text(
                         text = if (normalized.isBlank()) "推荐搜索" else "搜索结果",
                         style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
@@ -286,12 +331,12 @@ private fun SearchFilterChip(
         border = FilterChipDefaults.filterChipBorder(
             enabled = true,
             selected = selected,
-            borderColor = Color.White.copy(alpha = 0.12f),
+            borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
             selectedBorderColor = PrimaryOrange.copy(alpha = 0.62f)
         ),
         colors = FilterChipDefaults.filterChipColors(
-            containerColor = Surface2.copy(alpha = 0.62f),
-            labelColor = TextMuted,
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.74f),
+            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
             selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
             selectedLabelColor = PrimaryOrange
         )
@@ -313,14 +358,14 @@ private fun YearField(
         singleLine = true,
         shape = RoundedCornerShape(8.dp),
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = OutfuseSurface,
-            unfocusedContainerColor = OutfuseSurface,
+            focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
+            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
             focusedLabelColor = PrimaryOrange,
-            unfocusedLabelColor = TextMuted,
+            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
             cursorColor = PrimaryOrange
         )
     )
@@ -333,8 +378,8 @@ private fun SearchResultRow(item: LibraryItem, onClick: () -> Unit) {
             .fillMaxWidth()
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = OutfuseSurface.copy(alpha = 0.72f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -364,14 +409,14 @@ private fun SearchResultRow(item: LibraryItem, onClick: () -> Unit) {
                 Text(
                     text = item.title,
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = listOfNotNull(item.originalTitle, item.year?.toString(), item.sourceName).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -403,8 +448,8 @@ private fun SearchEmptyState(expanded: Boolean) {
     ) {
         Surface(
             shape = RoundedCornerShape(8.dp),
-            color = Surface2.copy(alpha = 0.62f),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
         ) {
             Column(
                 modifier = Modifier.padding(28.dp),
@@ -414,14 +459,14 @@ private fun SearchEmptyState(expanded: Boolean) {
                 Icon(
                     imageVector = Icons.Outlined.Movie,
                     contentDescription = null,
-                    tint = TextMuted,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(52.dp)
                 )
-                Text("没有匹配的媒体", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                Text("没有匹配的媒体", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     "可以尝试原片名、年份或文件夹名称。",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextMuted
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(2.dp))
             }

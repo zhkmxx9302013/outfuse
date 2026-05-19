@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
@@ -91,8 +93,15 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 
 private object LibraryScrollMemory {
-    var firstVisibleItemIndex: Int = 0
-    var firstVisibleItemScrollOffset: Int = 0
+    var filterName: String = LibraryFilter.ALL.name
+    var sortName: String = MediaSort.NAME.name
+    var sortAscending: Boolean = true
+    var layoutName: String = MediaLayout.LARGE.name
+    var sourceFilterId: String? = null
+    var gridFirstVisibleItemIndex: Int = 0
+    var gridFirstVisibleItemScrollOffset: Int = 0
+    var listFirstVisibleItemIndex: Int = 0
+    var listFirstVisibleItemScrollOffset: Int = 0
 }
 
 private enum class LibraryFilter(val label: String) {
@@ -120,21 +129,31 @@ fun LibraryScreen(
     onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit,
     onRefreshLibrary: (() -> Unit)? = null,
     onRefreshMetadata: (() -> Unit)? = null,
+    onCreateSeries: (String, List<LibraryItem>) -> Unit = { _, _ -> },
     onFileAction: (FileActionRequest) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
-    var filterName by rememberSaveable { mutableStateOf(LibraryFilter.ALL.name) }
-    var sortName by rememberSaveable { mutableStateOf(MediaSort.NAME.name) }
-    var sortAscending by rememberSaveable { mutableStateOf(true) }
-    var layoutName by rememberSaveable { mutableStateOf(MediaLayout.LARGE.name) }
-    var sourceFilterId by rememberSaveable { mutableStateOf<String?>(null) }
-    var actionTarget by remember { mutableStateOf<LibraryItem?>(null) }
     val useSharedScrollMemory = onBack == null
-    val rememberedGridIndex = LibraryScrollMemory.firstVisibleItemIndex
+    var filterName by rememberSaveable { mutableStateOf(if (useSharedScrollMemory) LibraryScrollMemory.filterName else LibraryFilter.ALL.name) }
+    var sortName by rememberSaveable { mutableStateOf(if (useSharedScrollMemory) LibraryScrollMemory.sortName else MediaSort.NAME.name) }
+    var sortAscending by rememberSaveable { mutableStateOf(if (useSharedScrollMemory) LibraryScrollMemory.sortAscending else true) }
+    var layoutName by rememberSaveable { mutableStateOf(if (useSharedScrollMemory) LibraryScrollMemory.layoutName else MediaLayout.LARGE.name) }
+    var sourceFilterId by rememberSaveable { mutableStateOf<String?>(if (useSharedScrollMemory) LibraryScrollMemory.sourceFilterId else null) }
+    var actionTarget by remember { mutableStateOf<LibraryItem?>(null) }
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    var selectedIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    var createSeriesDialogVisible by remember { mutableStateOf(false) }
+    val rememberedGridIndex = LibraryScrollMemory.gridFirstVisibleItemIndex
         .coerceAtMost(items.lastIndex.coerceAtLeast(0))
     val gridState = rememberLazyGridState(
         initialFirstVisibleItemIndex = if (useSharedScrollMemory) rememberedGridIndex else 0,
-        initialFirstVisibleItemScrollOffset = if (useSharedScrollMemory) LibraryScrollMemory.firstVisibleItemScrollOffset else 0
+        initialFirstVisibleItemScrollOffset = if (useSharedScrollMemory) LibraryScrollMemory.gridFirstVisibleItemScrollOffset else 0
+    )
+    val rememberedListIndex = LibraryScrollMemory.listFirstVisibleItemIndex
+        .coerceAtMost(items.lastIndex.coerceAtLeast(0))
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = if (useSharedScrollMemory) rememberedListIndex else 0,
+        initialFirstVisibleItemScrollOffset = if (useSharedScrollMemory) LibraryScrollMemory.listFirstVisibleItemScrollOffset else 0
     )
     val filter = LibraryFilter.valueOf(filterName)
     val sort = MediaSort.valueOf(sortName)
@@ -153,6 +172,8 @@ fun LibraryScreen(
         }
     }.sortedLibraryFor(sort, sortAscending)
     val playableVideos = filtered.filter { it.isVideoMedia() }
+    val selectedItems = filtered.filter { it.id in selectedIds }
+    val selectedIdSet = selectedIds.toSet()
     val stats = LibraryStats(
         total = items.size,
         files = items.count { it.streamUrl != null },
@@ -165,8 +186,39 @@ fun LibraryScreen(
         snapshotFlow {
             gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
         }.collect { (index, offset) ->
-            LibraryScrollMemory.firstVisibleItemIndex = index
-            LibraryScrollMemory.firstVisibleItemScrollOffset = offset
+            LibraryScrollMemory.gridFirstVisibleItemIndex = index
+            LibraryScrollMemory.gridFirstVisibleItemScrollOffset = offset
+        }
+    }
+
+    LaunchedEffect(listState, useSharedScrollMemory) {
+        if (!useSharedScrollMemory) return@LaunchedEffect
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }.collect { (index, offset) ->
+            LibraryScrollMemory.listFirstVisibleItemIndex = index
+            LibraryScrollMemory.listFirstVisibleItemScrollOffset = offset
+        }
+    }
+
+    LaunchedEffect(filterName, sortName, sortAscending, layoutName, sourceFilterId, useSharedScrollMemory) {
+        if (!useSharedScrollMemory) return@LaunchedEffect
+        LibraryScrollMemory.filterName = filterName
+        LibraryScrollMemory.sortName = sortName
+        LibraryScrollMemory.sortAscending = sortAscending
+        LibraryScrollMemory.layoutName = layoutName
+        LibraryScrollMemory.sourceFilterId = sourceFilterId
+    }
+
+    LaunchedEffect(filtered.map { it.id }) {
+        selectedIds = selectedIds.filter { id -> filtered.any { it.id == id } }
+    }
+
+    fun toggleSelection(item: LibraryItem) {
+        selectedIds = if (item.id in selectedIds) {
+            selectedIds.filterNot { it == item.id }
+        } else {
+            selectedIds + item.id
         }
     }
 
@@ -216,6 +268,13 @@ fun LibraryScreen(
                 val shuffled = playableVideos.shuffled()
                 shuffled.firstOrNull()?.let { first -> onPlayQueue(first, shuffled, true) }
             },
+            selectionMode = selectionMode,
+            selectedCount = selectedIds.size,
+            onToggleSelectionMode = {
+                selectionMode = !selectionMode
+                if (!selectionMode) selectedIds = emptyList()
+            },
+            onCreateSeriesFromSelection = { createSeriesDialogVisible = true },
             onRefreshLibrary = onRefreshLibrary,
             onRefreshMetadata = onRefreshMetadata
         )
@@ -224,7 +283,10 @@ fun LibraryScreen(
                 items = filtered,
                 series = series,
                 expanded = expanded,
-                onItemClick = onItemClick,
+                selectionMode = selectionMode,
+                selectedIds = selectedIdSet,
+                listState = listState,
+                onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                 onActionClick = { actionTarget = it },
                 modifier = Modifier.fillMaxSize()
             )
@@ -236,7 +298,9 @@ fun LibraryScreen(
                     expanded = true,
                     layout = layout,
                     gridState = gridState,
-                    onItemClick = onItemClick,
+                    selectionMode = selectionMode,
+                    selectedIds = selectedIdSet,
+                    onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                     onActionClick = { actionTarget = it },
                     modifier = Modifier.weight(1f)
                 )
@@ -255,7 +319,9 @@ fun LibraryScreen(
                 expanded = false,
                 layout = layout,
                 gridState = gridState,
-                onItemClick = onItemClick,
+                selectionMode = selectionMode,
+                selectedIds = selectedIdSet,
+                onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                 onActionClick = { actionTarget = it },
                 modifier = Modifier.fillMaxSize()
             )
@@ -268,6 +334,18 @@ fun LibraryScreen(
             onSubmit = { action, value ->
                 onFileAction(FileActionRequest(item, action, value))
                 actionTarget = null
+            }
+        )
+    }
+    if (createSeriesDialogVisible) {
+        CreateSeriesDialog(
+            selectedCount = selectedItems.size,
+            onDismiss = { createSeriesDialogVisible = false },
+            onConfirm = { name ->
+                onCreateSeries(name, selectedItems)
+                selectedIds = emptyList()
+                selectionMode = false
+                createSeriesDialogVisible = false
             }
         )
     }
@@ -510,6 +588,10 @@ private fun LibraryControls(
     onLayout: (MediaLayout) -> Unit,
     onPlaySequential: () -> Unit,
     onPlayShuffle: () -> Unit,
+    selectionMode: Boolean,
+    selectedCount: Int,
+    onToggleSelectionMode: () -> Unit,
+    onCreateSeriesFromSelection: () -> Unit,
     onRefreshLibrary: (() -> Unit)?,
     onRefreshMetadata: (() -> Unit)?
 ) {
@@ -518,6 +600,28 @@ private fun LibraryControls(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.padding(bottom = 10.dp)
     ) {
+        item {
+            OutlinedButton(
+                onClick = onToggleSelectionMode,
+                shape = RoundedCornerShape(7.dp),
+                border = BorderStroke(1.dp, if (selectionMode) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (selectionMode) PrimaryOrange else MaterialTheme.colorScheme.onSurface)
+            ) {
+                Text(if (selectionMode) "取消多选" else "多选")
+            }
+        }
+        if (selectionMode) {
+            item {
+                Button(
+                    enabled = selectedCount > 0,
+                    onClick = onCreateSeriesFromSelection,
+                    shape = RoundedCornerShape(7.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                ) {
+                    Text("新建系列 $selectedCount")
+                }
+            }
+        }
         item {
             OutlinedButton(
                 enabled = onRefreshLibrary != null,
@@ -608,6 +712,8 @@ private fun LibraryGrid(
     expanded: Boolean,
     layout: MediaLayout,
     gridState: LazyGridState,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
     onItemClick: (LibraryItem) -> Unit,
     onActionClick: (LibraryItem) -> Unit,
     modifier: Modifier = Modifier
@@ -632,6 +738,7 @@ private fun LibraryGrid(
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         items(items, key = { it.id }) { item ->
+            val selected = item.id in selectedIds
             Box {
                 PosterCard(
                     item = item,
@@ -640,11 +747,20 @@ private fun LibraryGrid(
                     modifier = Modifier.fillMaxWidth(),
                     seriesLabels = series.labelsFor(item)
                 )
-                IconButton(
-                    onClick = { onActionClick(item) },
-                    modifier = Modifier.align(Alignment.TopEnd)
-                ) {
-                    Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = Color.White)
+                if (selectionMode) {
+                    SelectionMark(
+                        selected = selected,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(7.dp)
+                    )
+                } else {
+                    IconButton(
+                        onClick = { onActionClick(item) },
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    ) {
+                        Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = Color.White)
+                    }
                 }
             }
         }
@@ -656,12 +772,16 @@ private fun LibraryList(
     items: List<LibraryItem>,
     series: List<UserSeries>,
     expanded: Boolean,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    listState: LazyListState,
     onItemClick: (LibraryItem) -> Unit,
     onActionClick: (LibraryItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
         modifier = modifier,
+        state = listState,
         contentPadding = PaddingValues(
             start = if (expanded) 32.dp else 20.dp,
             top = 6.dp,
@@ -674,6 +794,8 @@ private fun LibraryList(
             LibraryListRow(
                 item = item,
                 seriesLabels = series.labelsFor(item),
+                selectionMode = selectionMode,
+                selected = item.id in selectedIds,
                 onClick = { onItemClick(item) },
                 onActionClick = { onActionClick(item) }
             )
@@ -685,6 +807,8 @@ private fun LibraryList(
 private fun LibraryListRow(
     item: LibraryItem,
     seriesLabels: List<String>,
+    selectionMode: Boolean,
+    selected: Boolean,
     onClick: () -> Unit,
     onActionClick: () -> Unit
 ) {
@@ -694,13 +818,16 @@ private fun LibraryListRow(
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+        border = BorderStroke(1.dp, if (selected) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (selectionMode) {
+                SelectionMark(selected = selected)
+            }
             Box(
                 modifier = Modifier
                     .width(78.dp)
@@ -728,11 +855,75 @@ private fun LibraryListRow(
                     TechBadge(if (item.isImageMedia()) "图片" else item.resolution, color = PrimaryOrange)
                 }
             }
-            IconButton(onClick = onActionClick) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!selectionMode) {
+                IconButton(onClick = onActionClick) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
+}
+
+@Composable
+private fun SelectionMark(
+    selected: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.size(26.dp),
+        shape = RoundedCornerShape(50),
+        color = if (selected) PrimaryOrange else Color.Black.copy(alpha = 0.56f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = if (selected) 0.88f else 0.42f))
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = if (selected) "✓" else "",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun CreateSeriesDialog(
+    selectedCount: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建系列") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("将 $selectedCount 个已选媒体加入新系列。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("系列名称") },
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selectedCount > 0,
+                onClick = { onConfirm(name.ifBlank { "新建系列" }) }
+            ) {
+                Text("创建")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
 }
 
 @Composable

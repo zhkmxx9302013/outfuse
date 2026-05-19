@@ -14,6 +14,10 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -22,6 +26,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -72,6 +77,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-datasource:1.8.0")
     implementation("androidx.media3:media3-ui:1.8.0")
+    implementation("com.befovy.fijkplayer:fijkplayer-full:0.7.16")
+    implementation("org.videolan.android:libvlc-all:3.6.5")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.hierynomus:smbj:0.14.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

@@ -174,7 +174,7 @@ fun SettingsScreen(
             ) {
                 OptionSetting(
                     title = "文件信息语言",
-                    subtitle = "仅影响界面与基础文件信息展示，不进行刮削",
+                    subtitle = "影响本地 NFO 与文件名解析后的展示语言",
                     options = listOf("简体中文", "繁体中文", "English", "日本語"),
                     selected = currentSettings.metadataLanguage,
                     onSelected = { update(currentSettings.copy(metadataLanguage = it), "文件信息语言已设为 $it") }

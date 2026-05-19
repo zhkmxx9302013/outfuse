@@ -12,22 +12,76 @@ import java.io.File
 
 class MediaLibraryStore(context: Context) {
     private val libraryFile = File(context.applicationContext.filesDir, "media_library.json")
+    private val backupFile = File(context.applicationContext.filesDir, "media_library.json.bak")
+    private val tempFile = File(context.applicationContext.filesDir, "media_library.json.tmp")
+
+    private data class LoadResult(
+        val success: Boolean,
+        val items: List<LibraryItem>
+    )
+
+    private data class BatchLoadResult(
+        val success: Boolean,
+        val count: Int
+    )
 
     fun load(): List<LibraryItem> {
-        if (!libraryFile.exists()) return emptyList()
-        val text = runCatching { libraryFile.readText(Charsets.UTF_8) }.getOrNull().orEmpty()
-        if (text.isNotBlank()) {
-            runCatching {
-                val array = JSONArray(text)
-                buildList {
-                    for (index in 0 until array.length()) {
-                        array.optJSONObject(index)?.toLibraryItemOrNull()?.let(::add)
+        val primary = readFromFile(libraryFile)
+        if (primary.success) return primary.items
+        val backup = readFromFile(backupFile)
+        if (backup.success) return backup.items
+        return emptyList()
+    }
+
+    suspend fun loadBatched(
+        batchSize: Int = 500,
+        onBatch: suspend (List<LibraryItem>) -> Unit
+    ): Int {
+        val primary = readBatchedFromFile(libraryFile, batchSize, onBatch)
+        if (primary.success) return primary.count
+        val backup = readBatchedFromFile(backupFile, batchSize, onBatch)
+        if (backup.success) return backup.count
+        return 0
+    }
+
+    private suspend fun readBatchedFromFile(
+        file: File,
+        batchSize: Int,
+        onBatch: suspend (List<LibraryItem>) -> Unit
+    ): BatchLoadResult {
+        if (!file.exists() || file.length() == 0L) return BatchLoadResult(false, 0)
+        val effectiveBatchSize = batchSize.coerceAtLeast(1)
+        var count = 0
+        return runCatching {
+            JsonReader(file.reader(Charsets.UTF_8)).use { reader ->
+                val batch = ArrayList<LibraryItem>(effectiveBatchSize)
+                reader.beginArray()
+                while (reader.hasNext()) {
+                    reader.readLibraryItemOrNull()?.let { item ->
+                        batch += item
+                        if (batch.size >= effectiveBatchSize) {
+                            onBatch(batch.toList())
+                            count += batch.size
+                            batch.clear()
+                        }
                     }
                 }
-            }.getOrNull()?.let { return it }
+                reader.endArray()
+                if (batch.isNotEmpty()) {
+                    onBatch(batch.toList())
+                    count += batch.size
+                }
+            }
+            BatchLoadResult(true, count)
+        }.getOrElse {
+            BatchLoadResult(false, 0)
         }
-        return runCatching {
-            JsonReader(libraryFile.reader()).use { reader ->
+    }
+
+    private fun readFromFile(file: File): LoadResult {
+        if (!file.exists() || file.length() == 0L) return LoadResult(false, emptyList())
+        runCatching {
+            JsonReader(file.reader(Charsets.UTF_8)).use { reader ->
                 buildList {
                     reader.beginArray()
                     while (reader.hasNext()) {
@@ -36,20 +90,41 @@ class MediaLibraryStore(context: Context) {
                     reader.endArray()
                 }
             }
-        }.getOrDefault(emptyList())
+        }.getOrNull()?.let { return LoadResult(true, it) }
+
+        val text = runCatching { file.readText(Charsets.UTF_8) }.getOrNull().orEmpty()
+        if (text.isBlank()) return LoadResult(false, emptyList())
+        return runCatching {
+            val array = JSONArray(text)
+            buildList {
+                for (index in 0 until array.length()) {
+                    array.optJSONObject(index)?.toLibraryItemOrNull()?.let(::add)
+                }
+            }
+        }.fold(
+            onSuccess = { LoadResult(true, it) },
+            onFailure = { LoadResult(false, emptyList()) }
+        )
     }
 
     fun save(items: List<LibraryItem>) {
-        val seen = HashSet<String>(items.size)
-        JsonWriter(libraryFile.writer()).use { writer ->
+        tempFile.delete()
+        JsonWriter(tempFile.writer(Charsets.UTF_8)).use { writer ->
             writer.beginArray()
             items
                 .asSequence()
                 .filter { it.streamUrl != null }
-                .filter { seen.add("${it.sourceId}\u0000${it.path}") }
                 .forEach { writer.writeLibraryItem(it) }
             writer.endArray()
         }
+        if (libraryFile.exists() && libraryFile.length() > 0L) {
+            runCatching { libraryFile.copyTo(backupFile, overwrite = true) }
+        }
+        if (!tempFile.renameTo(libraryFile)) {
+            tempFile.copyTo(libraryFile, overwrite = true)
+            tempFile.delete()
+        }
+        runCatching { libraryFile.copyTo(backupFile, overwrite = true) }
     }
 
     private fun JsonWriter.writeLibraryItem(item: LibraryItem) {

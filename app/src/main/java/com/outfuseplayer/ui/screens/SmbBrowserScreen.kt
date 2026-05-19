@@ -21,7 +21,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
@@ -69,6 +71,7 @@ import com.outfuseplayer.data.smb.SmbEntry
 import com.outfuseplayer.data.smb.SmbRepository
 import com.outfuseplayer.data.smb.toLibraryItem
 import com.outfuseplayer.data.smb.toReadableSize
+import com.outfuseplayer.data.smb.toRemotePath
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.SourceHealth
@@ -93,23 +96,28 @@ fun SmbBrowserScreen(
     repository: SmbRepository,
     expanded: Boolean,
     publishSourceStatus: Boolean = true,
+    highlightPath: String? = null,
     onBack: () -> Unit,
     onSourceAdded: (MediaSource) -> Unit,
-    onMediaDiscovered: (List<LibraryItem>) -> Unit
+    onMediaDiscovered: (List<LibraryItem>) -> Unit,
+    onOpenMedia: (LibraryItem, List<LibraryItem>) -> Unit = { _, _ -> }
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var currentPath by rememberSaveable(initialConfig.sourceId) { mutableStateOf(initialConfig.path) }
+    var currentPath by rememberSaveable(initialConfig.sourceId, initialConfig.path) { mutableStateOf(initialConfig.path) }
     var entries by remember { mutableStateOf<List<SmbEntry>>(emptyList()) }
     var status by rememberSaveable(initialConfig.sourceId) { mutableStateOf("正在打开目录") }
-    var busy by rememberSaveable(initialConfig.sourceId) { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
     var sortName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaSort.NAME.name) }
     var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaLayout.LIST.name) }
     var actionEntry by remember { mutableStateOf<SmbEntry?>(null) }
     val sort = MediaSort.valueOf(sortName)
     val layout = MediaLayout.valueOf(layoutName)
     val sortedEntries = entries.sortedEntriesFor(sort)
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val normalizedHighlight = highlightPath?.toRemotePath()
 
     fun activeConfig(): SmbConfig = initialConfig.copy(path = currentPath)
 
@@ -140,8 +148,31 @@ fun SmbBrowserScreen(
         busy = false
     }
 
+    fun openMediaEntry(config: SmbConfig, entry: SmbEntry) {
+        val mediaItems = sortedEntries.filter { it.isMedia }.map { config.toLibraryItem(it) }
+        val selected = mediaItems.firstOrNull { it.path == entry.path } ?: config.toLibraryItem(entry)
+        val queue = mediaItems.ifEmpty { listOf(selected) }
+        publishSource(config, SourceHealth.ONLINE, "正在打开 ${entry.name}")
+        onMediaDiscovered(queue)
+        onOpenMedia(selected, queue)
+        status = "正在打开：${entry.name}"
+    }
+
     LaunchedEffect(initialConfig.sourceId, currentPath) {
         loadPath(currentPath)
+    }
+
+    LaunchedEffect(sortedEntries, normalizedHighlight, layout) {
+        val index = sortedEntries.indexOfFirst { entry ->
+            normalizedHighlight != null && entry.path.toRemotePath().equals(normalizedHighlight, ignoreCase = true)
+        }
+        if (index >= 0) {
+            if (layout == MediaLayout.LIST) {
+                listState.animateScrollToItem(index)
+            } else {
+                gridState.animateScrollToItem(index)
+            }
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -210,23 +241,22 @@ fun SmbBrowserScreen(
             if (layout == MediaLayout.LIST) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
+                    state = listState,
                     contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(sortedEntries, key = { it.path }) { entry ->
                         val config = activeConfig()
+                        val highlighted = normalizedHighlight != null && entry.path.toRemotePath().equals(normalizedHighlight, ignoreCase = true)
                         BrowserEntryRow(
                             entry = entry,
                             previewItem = if (entry.isMedia) config.toLibraryItem(entry) else null,
+                            highlighted = highlighted,
                             onActionClick = { actionEntry = entry },
                             onClick = {
                                 when {
                                     entry.isDirectory -> currentPath = entry.path
-                                    entry.isMedia -> {
-                                        publishSource(config, SourceHealth.ONLINE, "已加入 ${entry.name}")
-                                        onMediaDiscovered(listOf(config.toLibraryItem(entry)))
-                                        status = "已加入媒体库：${entry.name}"
-                                    }
+                                    entry.isMedia -> openMediaEntry(config, entry)
                                 }
                             }
                         )
@@ -236,25 +266,24 @@ fun SmbBrowserScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = if (layout == MediaLayout.LARGE) 150.dp else 108.dp),
                     modifier = Modifier.fillMaxSize(),
+                    state = gridState,
                     contentPadding = PaddingValues(bottom = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     gridItems(sortedEntries, key = { it.path }) { entry ->
                         val config = activeConfig()
+                        val highlighted = normalizedHighlight != null && entry.path.toRemotePath().equals(normalizedHighlight, ignoreCase = true)
                         BrowserEntryCard(
                             entry = entry,
                             previewItem = if (entry.isMedia) config.toLibraryItem(entry) else null,
                             compact = layout == MediaLayout.SMALL,
+                            highlighted = highlighted,
                             onActionClick = { actionEntry = entry },
                             onClick = {
                                 when {
                                     entry.isDirectory -> currentPath = entry.path
-                                    entry.isMedia -> {
-                                        publishSource(config, SourceHealth.ONLINE, "已加入 ${entry.name}")
-                                        onMediaDiscovered(listOf(config.toLibraryItem(entry)))
-                                        status = "已加入媒体库：${entry.name}"
-                                    }
+                                    entry.isMedia -> openMediaEntry(config, entry)
                                 }
                             }
                         )
@@ -391,6 +420,7 @@ private fun BrowserViewControls(
 private fun BrowserEntryRow(
     entry: SmbEntry,
     previewItem: LibraryItem?,
+    highlighted: Boolean,
     onActionClick: () -> Unit,
     onClick: () -> Unit
 ) {
@@ -400,8 +430,8 @@ private fun BrowserEntryRow(
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = OutfuseSurface.copy(alpha = 0.78f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else OutfuseSurface.copy(alpha = 0.78f),
+        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.06f))
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -425,6 +455,7 @@ private fun BrowserEntryRow(
                 )
                 Text(
                     text = when {
+                        highlighted -> "当前文件 · ${entry.size.toReadableSize()}"
                         entry.isDirectory -> "文件夹"
                         entry.isImage -> "图片 · ${entry.size.toReadableSize()}"
                         entry.isVideo -> "视频 · ${entry.size.toReadableSize()}"
@@ -451,6 +482,7 @@ private fun BrowserEntryCard(
     entry: SmbEntry,
     previewItem: LibraryItem?,
     compact: Boolean,
+    highlighted: Boolean,
     onActionClick: () -> Unit,
     onClick: () -> Unit
 ) {
@@ -460,8 +492,8 @@ private fun BrowserEntryCard(
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = OutfuseSurface.copy(alpha = 0.78f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else OutfuseSurface.copy(alpha = 0.78f),
+        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.06f))
     ) {
         Column(
             modifier = Modifier.padding(if (compact) 8.dp else 10.dp),
@@ -484,6 +516,7 @@ private fun BrowserEntryCard(
             if (!compact) {
                 Text(
                     text = when {
+                        highlighted -> "当前文件 · ${entry.size.toReadableSize()}"
                         entry.isDirectory -> "文件夹"
                         entry.isImage -> "图片 · ${entry.size.toReadableSize()}"
                         entry.isVideo -> "视频 · ${entry.size.toReadableSize()}"
