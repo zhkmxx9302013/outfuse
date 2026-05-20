@@ -3,6 +3,7 @@
 import android.content.Context
 
 data class AppSettings(
+    val interfaceLanguage: String = "system",
     val decodeStrategy: String = "自动",
     val subtitleLanguage: String = "简体中文",
     val audioLanguage: String = "原始音轨",
@@ -16,6 +17,10 @@ data class AppSettings(
     val scraperOnlineTmdb: Boolean = false,
     val scraperOnlineTvdb: Boolean = false,
     val scraperOnlineBangumi: Boolean = false,
+    val scraperOnlineImdb: Boolean = false,
+    val tmdbApiKey: String = "",
+    val tvdbApiKey: String = "",
+    val omdbApiKey: String = "",
     val scraperWriteBack: Boolean = false,
     val quickSyncDeletedFiles: Boolean = true,
     val metadataCacheLimit: String = "500 MB",
@@ -39,6 +44,7 @@ class SettingsStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("Outfuse_settings", Context.MODE_PRIVATE)
 
     fun load(): AppSettings = AppSettings(
+        interfaceLanguage = prefs.getString(KEY_INTERFACE_LANGUAGE, "system") ?: "system",
         decodeStrategy = prefs.getString(KEY_DECODE_STRATEGY, "自动") ?: "自动",
         subtitleLanguage = prefs.getString(KEY_SUBTITLE_LANGUAGE, "简体中文") ?: "简体中文",
         audioLanguage = prefs.getString(KEY_AUDIO_LANGUAGE, "原始音轨") ?: "原始音轨",
@@ -52,6 +58,10 @@ class SettingsStore(context: Context) {
         scraperOnlineTmdb = prefs.getBoolean(KEY_SCRAPER_ONLINE_TMDB, false),
         scraperOnlineTvdb = prefs.getBoolean(KEY_SCRAPER_ONLINE_TVDB, false),
         scraperOnlineBangumi = prefs.getBoolean(KEY_SCRAPER_ONLINE_BANGUMI, false),
+        scraperOnlineImdb = prefs.getBoolean(KEY_SCRAPER_ONLINE_IMDB, false),
+        tmdbApiKey = prefs.getString(KEY_TMDB_API_KEY, "") ?: "",
+        tvdbApiKey = prefs.getString(KEY_TVDB_API_KEY, "") ?: "",
+        omdbApiKey = prefs.getString(KEY_OMDB_API_KEY, "") ?: "",
         scraperWriteBack = prefs.getBoolean(KEY_SCRAPER_WRITE_BACK, false),
         quickSyncDeletedFiles = prefs.getBoolean(KEY_QUICK_SYNC_DELETED_FILES, true),
         metadataCacheLimit = prefs.getString(KEY_METADATA_CACHE_LIMIT, "500 MB") ?: "500 MB",
@@ -73,6 +83,7 @@ class SettingsStore(context: Context) {
 
     fun save(settings: AppSettings) {
         prefs.edit()
+            .putString(KEY_INTERFACE_LANGUAGE, settings.interfaceLanguage)
             .putString(KEY_DECODE_STRATEGY, settings.decodeStrategy)
             .putString(KEY_SUBTITLE_LANGUAGE, settings.subtitleLanguage)
             .putString(KEY_AUDIO_LANGUAGE, settings.audioLanguage)
@@ -86,6 +97,10 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_SCRAPER_ONLINE_TMDB, settings.scraperOnlineTmdb)
             .putBoolean(KEY_SCRAPER_ONLINE_TVDB, settings.scraperOnlineTvdb)
             .putBoolean(KEY_SCRAPER_ONLINE_BANGUMI, settings.scraperOnlineBangumi)
+            .putBoolean(KEY_SCRAPER_ONLINE_IMDB, settings.scraperOnlineImdb)
+            .putString(KEY_TMDB_API_KEY, settings.tmdbApiKey)
+            .putString(KEY_TVDB_API_KEY, settings.tvdbApiKey)
+            .putString(KEY_OMDB_API_KEY, settings.omdbApiKey)
             .putBoolean(KEY_SCRAPER_WRITE_BACK, settings.scraperWriteBack)
             .putBoolean(KEY_QUICK_SYNC_DELETED_FILES, settings.quickSyncDeletedFiles)
             .putString(KEY_METADATA_CACHE_LIMIT, settings.metadataCacheLimit)
@@ -125,6 +140,7 @@ class SettingsStore(context: Context) {
     }
 
     companion object {
+        private const val KEY_INTERFACE_LANGUAGE = "interface_language"
         private const val KEY_DECODE_STRATEGY = "decode_strategy"
         private const val KEY_SUBTITLE_LANGUAGE = "subtitle_language"
         private const val KEY_AUDIO_LANGUAGE = "audio_language"
@@ -138,6 +154,10 @@ class SettingsStore(context: Context) {
         private const val KEY_SCRAPER_ONLINE_TMDB = "scraper_online_tmdb"
         private const val KEY_SCRAPER_ONLINE_TVDB = "scraper_online_tvdb"
         private const val KEY_SCRAPER_ONLINE_BANGUMI = "scraper_online_bangumi"
+        private const val KEY_SCRAPER_ONLINE_IMDB = "scraper_online_imdb"
+        private const val KEY_TMDB_API_KEY = "tmdb_api_key"
+        private const val KEY_TVDB_API_KEY = "tvdb_api_key"
+        private const val KEY_OMDB_API_KEY = "omdb_api_key"
         private const val KEY_SCRAPER_WRITE_BACK = "scraper_write_back"
         private const val KEY_QUICK_SYNC_DELETED_FILES = "quick_sync_deleted_files"
         private const val KEY_METADATA_CACHE_LIMIT = "metadata_cache_limit"

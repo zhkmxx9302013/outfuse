@@ -46,22 +46,39 @@ class NfoMetadataRepository(context: Context) {
     private val appContext = context.applicationContext
     private val smbRepository = SmbRepository()
     private val webDavRepository = WebDavRepository()
+    private val onlineMetadataRepository = OnlineMetadataRepository()
     private val artworkCacheDir = File(appContext.cacheDir, "artwork")
 
     suspend fun readForItem(item: LibraryItem, settings: AppSettings = AppSettings()): NfoMetadata? = withContext(Dispatchers.IO) {
         if (!settings.autoDownloadMetadata || settings.scrapeStrategy == "关闭") return@withContext null
         val stream = item.streamUrl ?: return@withContext null
         val uri = runCatching { Uri.parse(stream) }.getOrNull() ?: return@withContext null
-        if (item.isServerBacked()) {
-            return@withContext null
+        val serverMetadata = if (settings.scraperServerMetadata && item.isServerBacked()) {
+            item.toExistingServerMetadata()
+        } else {
+            null
         }
-
-        when {
-            uri.scheme.equals("smb", ignoreCase = true) -> readSmbMetadata(item, uri, settings)
-            uri.scheme.equals(WebDavUriScheme, ignoreCase = true) -> readWebDavMetadata(item, uri, settings)
-            uri.scheme.equals("file", ignoreCase = true) -> readFileMetadata(item, settings)
-            uri.scheme.equals("content", ignoreCase = true) && uri.toString().contains("/tree/") -> readSafMetadata(item, uri, settings)
-            else -> null
+        val localMetadata = if (settings.scraperSourceOrder != "仅服务器" && !item.isServerBacked()) {
+            when {
+                uri.scheme.equals("smb", ignoreCase = true) -> readSmbMetadata(item, uri, settings)
+                uri.scheme.equals(WebDavUriScheme, ignoreCase = true) -> readWebDavMetadata(item, uri, settings)
+                uri.scheme.equals("file", ignoreCase = true) -> readFileMetadata(item, settings)
+                uri.scheme.equals("content", ignoreCase = true) && uri.toString().contains("/tree/") -> readSafMetadata(item, uri, settings)
+                else -> null
+            }
+        } else {
+            null
+        }
+        val onlineMetadata = if (settings.scraperSourceOrder != "仅本地") {
+            onlineMetadataRepository.lookup(item, settings)
+        } else {
+            null
+        }
+        when (settings.scraperSourceOrder) {
+            "服务器优先" -> serverMetadata ?: onlineMetadata ?: localMetadata
+            "仅本地" -> localMetadata
+            "仅服务器" -> serverMetadata ?: onlineMetadata
+            else -> localMetadata ?: serverMetadata ?: onlineMetadata
         }
     }
 
@@ -297,6 +314,26 @@ class NfoMetadataRepository(context: Context) {
     private fun LibraryItem.isServerBacked(): Boolean =
         sourceId.startsWith("jellyfin-", ignoreCase = true) ||
             sourceId.startsWith("emby-", ignoreCase = true)
+
+    private fun LibraryItem.toExistingServerMetadata(): NfoMetadata? =
+        NfoMetadata(
+            title = title,
+            originalTitle = originalTitle.orEmpty(),
+            overview = overview,
+            year = year,
+            rating = rating.takeUnless { it == "-" }.orEmpty(),
+            genres = genres,
+            posterUrl = posterUrl,
+            backdropUrl = backdropUrl,
+            source = "media-server",
+            confidence = 0.95f
+        ).takeIf {
+            it.overview.isNotBlank() ||
+                it.posterUrl != null ||
+                it.backdropUrl != null ||
+                it.rating.isNotBlank() ||
+                it.genres.isNotEmpty()
+        }
 
     private fun String.parentDocumentId(rootDocumentId: String): String {
         val normalized = trim()

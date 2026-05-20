@@ -48,6 +48,12 @@ class RemoteConfigStore(context: Context) {
         .put("token", token)
         .put("path", path)
         .put("userId", userId)
+        .put("oauthClientId", oauthClientId)
+        .put("oauthClientSecret", oauthClientSecret)
+        .put("oauthRedirectUri", oauthRedirectUri)
+        .put("oauthScope", oauthScope)
+        .put("refreshToken", refreshToken)
+        .put("tokenExpiresAt", tokenExpiresAt)
 
     private fun JSONObject.toConfigOrNull(): RemoteSourceConfig? = runCatching {
         RemoteSourceConfig(
@@ -58,7 +64,13 @@ class RemoteConfigStore(context: Context) {
             password = optString("password"),
             token = optString("token"),
             path = optString("path"),
-            userId = optString("userId")
+            userId = optString("userId"),
+            oauthClientId = optString("oauthClientId"),
+            oauthClientSecret = optString("oauthClientSecret"),
+            oauthRedirectUri = optString("oauthRedirectUri"),
+            oauthScope = optString("oauthScope"),
+            refreshToken = optString("refreshToken"),
+            tokenExpiresAt = optLong("tokenExpiresAt", 0L)
         )
     }.getOrNull()
 }

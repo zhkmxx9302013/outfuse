@@ -83,10 +83,14 @@ data class SmbSkippedDirectoryStats(
 
 object SmbCredentialRegistry {
     private val configs = ConcurrentHashMap<String, SmbConfig>()
+    private val configsBySourceId = ConcurrentHashMap<String, SmbConfig>()
 
     fun register(config: SmbConfig) {
         configs[key(config.server, config.share, config.port)] = config
+        configsBySourceId[config.sourceId] = config
     }
+
+    fun find(sourceId: String): SmbConfig? = configsBySourceId[sourceId]
 
     fun find(uri: Uri): SmbConfig? {
         val server = uri.host ?: return null

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.1 - 2026-05-20
+
+- Added multilingual interface support with follow-system, Simplified Chinese, and English options.
+- Localized the main navigation, Settings, Help guide, first-run guide, saved-library restore prompts, and common settings controls.
+- Added a shared UI string provider so new screens can be connected to the same localization layer without changing app navigation or layout.
+- Added source-scoped library refresh and metadata refresh so the selected media library can be updated without refreshing every source.
+- Improved metadata scraping configuration, including TMDB, TVDB, Bangumi, and OMDb / IMDb-style online sources with API key fields.
+- Added Baidu Netdisk and Aliyun Drive / PDS source entries, including in-app web OAuth login flow and token persistence.
+- Added a built-in Help and Usage Guide under Settings covering source configuration, cloud OAuth, API key setup, scraping behavior, playback, file management, and troubleshooting.
+- Fixed date-descending sorting behavior and kept navigation/index labels aligned with the active sort order.
+- Updated the release APK name and media-server client version to `outfuse-0.1.1-release.apk`.
+
 ## 0.1.0 - 2026-05-19
 
 - Fixed a playback startup crash by adding the required `WAKE_LOCK` permission for ExoPlayer wake mode.
@@ -18,4 +30,3 @@
 - Added source browsing and source status management improvements, including edit/delete flows and background scan progress.
 - Added media library sorting, filtering, layout switching, multi-select series creation, and better return-position preservation from playback and search.
 - Added light/dark theme refinements, first-run guidance, and removal of bundled demo media from the user-facing library.
-

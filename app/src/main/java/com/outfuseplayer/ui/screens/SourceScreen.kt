@@ -5,6 +5,9 @@ import android.net.Uri
 import android.os.Build
 import android.content.pm.PackageManager
 import android.provider.DocumentsContract
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -90,6 +93,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.outfuseplayer.data.smb.SmbConfig
 import com.outfuseplayer.data.smb.SmbConfigStore
 import com.outfuseplayer.data.smb.SmbCredentialRegistry
@@ -102,6 +106,7 @@ import com.outfuseplayer.data.smb.toReadableSize
 import com.outfuseplayer.data.LocalMediaRepository
 import com.outfuseplayer.data.discovery.DiscoveredService
 import com.outfuseplayer.data.discovery.NetworkDiscoveryRepository
+import com.outfuseplayer.data.remote.CloudDriveRepository
 import com.outfuseplayer.data.remote.JellyfinRepository
 import com.outfuseplayer.data.remote.RemoteConfigStore
 import com.outfuseplayer.data.remote.RemoteSourceConfig
@@ -134,6 +139,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.absoluteValue
 
 data class SourceScanUiState(
@@ -181,6 +187,7 @@ fun SourceScreen(
     val repository = remember { SmbRepository() }
     val webDavRepository = remember { WebDavRepository() }
     val jellyfinRepository = remember { JellyfinRepository() }
+    val cloudDriveRepository = remember { CloudDriveRepository() }
     val localRepository = remember { LocalMediaRepository(context) }
     val discoveryRepository = remember { NetworkDiscoveryRepository(context) }
     val hasSavedConfig = remember { store.hasSaved() }
@@ -424,6 +431,24 @@ fun SourceScreen(
                     onRevealHandled()
                 }
             }
+            SourceType.BAIDU_NETDISK -> {
+                remoteConfigForSource(source)?.let { config ->
+                    remoteHighlightPath = item.path.trim('/')
+                    localHighlightPath = null
+                    smbHighlightPath = null
+                    remoteBrowserConfig = config.copy(path = item.path.parentRemotePath())
+                    onRevealHandled()
+                }
+            }
+            SourceType.ALIYUN_DRIVE -> {
+                remoteConfigForSource(source)?.let { config ->
+                    remoteHighlightPath = item.path.trim('/')
+                    localHighlightPath = null
+                    smbHighlightPath = null
+                    remoteBrowserConfig = config
+                    onRevealHandled()
+                }
+            }
             SourceType.JELLYFIN, SourceType.EMBY -> {
                 remoteConfigForSource(source)?.let { config ->
                     remoteHighlightPath = item.path.trim('/')
@@ -466,8 +491,9 @@ fun SourceScreen(
     remoteBrowserConfig?.let { config ->
         RemoteBrowserScreen(
             initialConfig = config,
-            webDavRepository = webDavRepository,
-            jellyfinRepository = jellyfinRepository,
+                webDavRepository = webDavRepository,
+                jellyfinRepository = jellyfinRepository,
+                cloudDriveRepository = cloudDriveRepository,
             expanded = expanded,
             highlightPath = remoteHighlightPath,
             onBack = { remoteBrowserConfig = null },
@@ -557,6 +583,7 @@ fun SourceScreen(
                             repository = repository,
                             webDavRepository = webDavRepository,
                             jellyfinRepository = jellyfinRepository,
+                            cloudDriveRepository = cloudDriveRepository,
                             localRepository = localRepository,
                             discoveryRepository = discoveryRepository,
                             store = store,
@@ -609,6 +636,7 @@ fun SourceScreen(
                     repository = repository,
                     webDavRepository = webDavRepository,
                     jellyfinRepository = jellyfinRepository,
+                    cloudDriveRepository = cloudDriveRepository,
                     localRepository = localRepository,
                     discoveryRepository = discoveryRepository,
                     store = store,
@@ -750,6 +778,7 @@ private fun RemoteBrowserScreen(
     initialConfig: RemoteSourceConfig,
     webDavRepository: WebDavRepository,
     jellyfinRepository: JellyfinRepository,
+    cloudDriveRepository: CloudDriveRepository,
     expanded: Boolean,
     highlightPath: String? = null,
     onBack: () -> Unit,
@@ -785,6 +814,7 @@ private fun RemoteBrowserScreen(
         val result = when (config.type) {
             SourceType.WEBDAV -> webDavRepository.list(config, config.path)
             SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.list(config, config.path)
+            SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.list(config, config.path)
             else -> com.outfuseplayer.data.remote.RemoteActionResult<List<RemoteEntry>>(false, "暂不支持该来源类型", emptyList())
         }
         entries = result.value.orEmpty()
@@ -1223,6 +1253,7 @@ private fun AddSmbPanel(
     repository: SmbRepository,
     webDavRepository: WebDavRepository,
     jellyfinRepository: JellyfinRepository,
+    cloudDriveRepository: CloudDriveRepository,
     localRepository: LocalMediaRepository,
     discoveryRepository: NetworkDiscoveryRepository,
     store: SmbConfigStore,
@@ -1252,12 +1283,20 @@ private fun AddSmbPanel(
     var remotePath by rememberSaveable { mutableStateOf(initialRemoteConfig?.path.orEmpty()) }
     var remoteToken by rememberSaveable { mutableStateOf(initialRemoteConfig?.token.orEmpty()) }
     var remoteUserId by rememberSaveable { mutableStateOf(initialRemoteConfig?.userId.orEmpty()) }
+    var remoteClientId by rememberSaveable { mutableStateOf(initialRemoteConfig?.oauthClientId.orEmpty()) }
+    var remoteClientSecret by rememberSaveable { mutableStateOf(initialRemoteConfig?.oauthClientSecret.orEmpty()) }
+    var remoteRedirectUri by rememberSaveable { mutableStateOf(initialRemoteConfig?.oauthRedirectUri.orEmpty()) }
+    var remoteScope by rememberSaveable { mutableStateOf(initialRemoteConfig?.oauthScope.orEmpty()) }
+    var remoteRefreshToken by rememberSaveable { mutableStateOf(initialRemoteConfig?.refreshToken.orEmpty()) }
     var status by rememberSaveable { mutableStateOf("填写 SMB 信息后点“连接并浏览”，可直接点媒体加入播放列表。") }
     var busy by remember { mutableStateOf(false) }
     var entries by remember { mutableStateOf<List<SmbEntry>>(emptyList()) }
     var remoteEntries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var discoveredServices by remember { mutableStateOf<List<DiscoveredService>>(emptyList()) }
     var discoveryBusy by remember { mutableStateOf(false) }
+    var oauthUrl by remember { mutableStateOf<String?>(null) }
+    var oauthConfig by remember { mutableStateOf<RemoteSourceConfig?>(null) }
+    var oauthState by remember { mutableStateOf("") }
 
     LaunchedEffect(initialConfig) {
         selectedSourceType = initialSourceType.name
@@ -1281,6 +1320,11 @@ private fun AddSmbPanel(
             password = it.password
             remoteToken = it.token
             remoteUserId = it.userId
+            remoteClientId = it.oauthClientId
+            remoteClientSecret = it.oauthClientSecret
+            remoteRedirectUri = it.oauthRedirectUri
+            remoteScope = it.oauthScope
+            remoteRefreshToken = it.refreshToken
             entries = emptyList()
             remoteEntries = emptyList()
             if (it.baseUrl.isNotBlank()) {
@@ -1289,6 +1333,7 @@ private fun AddSmbPanel(
                 val result = when (it.type) {
                     SourceType.WEBDAV -> webDavRepository.list(it, it.path)
                     SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.list(it, it.path)
+                    SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.list(it, it.path)
                     else -> com.outfuseplayer.data.remote.RemoteActionResult<List<RemoteEntry>>(false, "暂不支持该来源类型", emptyList())
                 }
                 remoteEntries = result.value.orEmpty()
@@ -1334,15 +1379,30 @@ private fun AddSmbPanel(
 
     fun currentRemoteConfig(): RemoteSourceConfig {
         val type = currentSourceType()
+        val defaultBaseUrl = when (type) {
+            SourceType.BAIDU_NETDISK -> "https://pan.baidu.com"
+            SourceType.ALIYUN_DRIVE -> "https://api.aliyundrive.com"
+            else -> ""
+        }
+        val defaultPath = when (type) {
+            SourceType.BAIDU_NETDISK -> "/"
+            SourceType.ALIYUN_DRIVE -> "root"
+            else -> ""
+        }
         return RemoteSourceConfig(
             type = type,
             name = name.ifBlank { type.remoteTypeLabel() },
-            baseUrl = remoteBaseUrl.trim(),
+            baseUrl = remoteBaseUrl.ifBlank { defaultBaseUrl }.trim(),
             username = username.trim(),
             password = password,
             token = remoteToken.trim(),
-            path = remotePath.trim('/'),
-            userId = remoteUserId.trim()
+            path = remotePath.ifBlank { defaultPath }.trim('/'),
+            userId = remoteUserId.trim(),
+            oauthClientId = remoteClientId.trim(),
+            oauthClientSecret = remoteClientSecret,
+            oauthRedirectUri = remoteRedirectUri.trim(),
+            oauthScope = remoteScope.trim(),
+            refreshToken = remoteRefreshToken.trim()
         ).withValidatedBaseUrl()
     }
 
@@ -1552,6 +1612,19 @@ private fun AddSmbPanel(
                         }
                     }
                 )
+                SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.scanMedia(
+                    config = config,
+                    onProgress = { scanned, pending, found, current ->
+                        withContext(Dispatchers.Main) {
+                            status = "${config.type.remoteTypeLabel()} 扫描中：$found 个媒体 · $scanned 个目录 · 待扫描 $pending · $current"
+                        }
+                    },
+                    onBatch = { batch ->
+                        withContext(Dispatchers.Main) {
+                            onMediaDiscovered(batch)
+                        }
+                    }
+                )
                 else -> com.outfuseplayer.data.remote.RemoteActionResult<Int>(false, "该类型暂不支持远程扫描")
             }
             val saved = if (result.success) SourceHealth.ONLINE else SourceHealth.OFFLINE
@@ -1594,6 +1667,8 @@ private fun AddSmbPanel(
                             SourceType.WEBDAV -> "添加 WebDAV"
                             SourceType.JELLYFIN -> "添加 Jellyfin"
                             SourceType.EMBY -> "添加 Emby"
+                            SourceType.BAIDU_NETDISK -> "添加百度网盘"
+                            SourceType.ALIYUN_DRIVE -> "添加阿里网盘"
                             else -> "添加 SMB / NAS"
                         },
                         style = MaterialTheme.typography.titleLarge,
@@ -1605,6 +1680,8 @@ private fun AddSmbPanel(
                             SourceType.WEBDAV -> "支持目录浏览、递归扫描、图片/GIF 预览和视频播放"
                             SourceType.JELLYFIN -> "支持登录、媒体库浏览、封面和直连播放"
                             SourceType.EMBY -> "支持 Emby 登录、媒体库浏览、封面和直连播放"
+                            SourceType.BAIDU_NETDISK -> "使用百度网盘开放平台 Access Token 浏览和扫描媒体"
+                            SourceType.ALIYUN_DRIVE -> "使用阿里网盘 Access Token 与 Drive ID 浏览和扫描媒体"
                             else -> "支持 SMB2/3 连接、目录浏览、图片预览和视频播放列表"
                         },
                         style = MaterialTheme.typography.labelMedium,
@@ -1627,11 +1704,23 @@ private fun AddSmbPanel(
                     if (it == SourceType.LOCAL) {
                         name = LocalMediaRepository.LOCAL_TREE_SOURCE_NAME
                     }
+                    if (it == SourceType.BAIDU_NETDISK && remoteBaseUrl.isBlank()) {
+                        remoteBaseUrl = "https://pan.baidu.com"
+                        remotePath = "/"
+                        remoteScope = remoteScope.ifBlank { "netdisk" }
+                    }
+                    if (it == SourceType.ALIYUN_DRIVE && remoteBaseUrl.isBlank()) {
+                        remoteBaseUrl = ""
+                        remotePath = "root"
+                        remoteScope = remoteScope.ifBlank { "user:base,file:all:read" }
+                    }
                     status = when (it) {
                         SourceType.LOCAL -> "选择扫描系统媒体库，或选择本机目录后自动递归扫描。"
                         SourceType.WEBDAV -> "填写 WebDAV 地址后可测试、浏览或保存扫描，支持 https:// 校验。"
                         SourceType.JELLYFIN -> "填写 Jellyfin 地址和用户名密码，或直接填写 API Key。"
                         SourceType.EMBY -> "填写 Emby 地址和用户名密码，或直接填写 API Key。"
+                        SourceType.BAIDU_NETDISK -> "填写百度网盘 Access Token，可浏览目录并扫描媒体。"
+                        SourceType.ALIYUN_DRIVE -> "填写阿里网盘 Access Token 与 Drive ID，可浏览目录并扫描媒体。"
                         else -> "填写 SMB 信息后点“连接并浏览”，可直接点媒体加入播放列表。"
                     }
                 }
@@ -1848,18 +1937,95 @@ private fun AddSmbPanel(
                 else -> {
                 SourceTextField("名称", name, { name = it })
                 SourceTextField(
-                    label = if (currentSourceType().isMediaServerType()) "${currentSourceType().remoteTypeLabel()} 地址" else "WebDAV 地址",
+                    label = when {
+                        currentSourceType().isMediaServerType() -> "${currentSourceType().remoteTypeLabel()} 地址"
+                        currentSourceType() == SourceType.BAIDU_NETDISK -> "百度网盘 API 地址"
+                        currentSourceType() == SourceType.ALIYUN_DRIVE -> "阿里网盘/PDS API 地址"
+                        else -> "WebDAV 地址"
+                    },
                     value = remoteBaseUrl,
                     onValueChange = { remoteBaseUrl = it }
                 )
                 SourceTextField(
-                    label = if (currentSourceType().isMediaServerType()) "媒体库/父级 ID（可留空）" else "起始路径（可留空）",
+                    label = when (currentSourceType()) {
+                        SourceType.JELLYFIN, SourceType.EMBY -> "媒体库/父级 ID（可留空）"
+                        SourceType.BAIDU_NETDISK -> "起始路径（默认 /）"
+                        SourceType.ALIYUN_DRIVE -> "父级 file_id（默认 root）"
+                        else -> "起始路径（可留空）"
+                    },
                     value = remotePath,
                     onValueChange = { remotePath = it.trimStart('/') }
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SourceTextField("用户名", username, { username = it }, modifier = Modifier.weight(1f))
-                    SourceTextField("密码", password, { password = it }, password = true, modifier = Modifier.weight(1f))
+                if (currentSourceType() == SourceType.BAIDU_NETDISK || currentSourceType() == SourceType.ALIYUN_DRIVE) {
+                    SourceTextField("OAuth Client ID / App Key", remoteClientId, { remoteClientId = it })
+                    SourceTextField("OAuth Client Secret（Native 应用可留空）", remoteClientSecret, { remoteClientSecret = it }, password = true)
+                    SourceTextField(
+                        "OAuth 回调地址",
+                        remoteRedirectUri,
+                        { remoteRedirectUri = it },
+                    )
+                    SourceTextField(
+                        "OAuth Scope",
+                        remoteScope,
+                        { remoteScope = it },
+                    )
+                    SourceTextField("Access Token", remoteToken, { remoteToken = it }, password = true)
+                    SourceTextField("Refresh Token", remoteRefreshToken, { remoteRefreshToken = it }, password = true)
+                    if (currentSourceType() == SourceType.ALIYUN_DRIVE) {
+                        SourceTextField("Drive ID", remoteUserId, { remoteUserId = it })
+                    } else {
+                        SourceTextField("账号标识（可选，用于区分多个网盘）", remoteUserId, { remoteUserId = it })
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            enabled = !busy,
+                            onClick = {
+                                val config = currentRemoteConfigOrNull() ?: return@Button
+                                val state = UUID.randomUUID().toString()
+                                runCatching {
+                                    oauthState = state
+                                    oauthConfig = config
+                                    oauthUrl = cloudDriveRepository.buildOAuthAuthorizationUrl(config, state)
+                                }.onFailure {
+                                    status = it.toRemoteFriendlyMessage()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(7.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                        ) {
+                            Text("网页登录授权")
+                        }
+                        OutlinedButton(
+                            enabled = !busy && remoteRefreshToken.isNotBlank(),
+                            onClick = {
+                                val config = currentRemoteConfigOrNull() ?: return@OutlinedButton
+                                scope.launch {
+                                    busy = true
+                                    val result = cloudDriveRepository.refreshOAuthToken(config)
+                                    result.value?.let { refreshed ->
+                                        remoteToken = refreshed.token
+                                        remoteRefreshToken = refreshed.refreshToken
+                                        remoteUserId = refreshed.userId
+                                        publishRemoteSource(refreshed, SourceHealth.ONLINE, "Token 已刷新")
+                                    }
+                                    status = result.message
+                                    busy = false
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(7.dp),
+                            border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.72f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryOrange)
+                        ) {
+                            Text("刷新 Token")
+                        }
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SourceTextField("用户名", username, { username = it }, modifier = Modifier.weight(1f))
+                        SourceTextField("密码", password, { password = it }, password = true, modifier = Modifier.weight(1f))
+                    }
                 }
                 if (currentSourceType().isMediaServerType()) {
                     SourceTextField("API Key / Access Token（可选）", remoteToken, { remoteToken = it }, password = true)
@@ -1874,6 +2040,7 @@ private fun AddSmbPanel(
                                 val result = when (config.type) {
                                     SourceType.WEBDAV -> webDavRepository.testConnection(config)
                                     SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.testConnection(config)
+                                    SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.testConnection(config)
                                     else -> com.outfuseplayer.data.remote.RemoteActionResult<RemoteSourceConfig>(false, "暂不支持该来源类型")
                                 }
                                 result.value?.let {
@@ -1901,6 +2068,7 @@ private fun AddSmbPanel(
                                 val connectResult = when (config.type) {
                                     SourceType.WEBDAV -> webDavRepository.testConnection(config)
                                     SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.testConnection(config)
+                                    SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.testConnection(config)
                                     else -> com.outfuseplayer.data.remote.RemoteActionResult<RemoteSourceConfig>(false, "暂不支持该来源类型")
                                 }
                                 val connected = connectResult.value
@@ -1911,6 +2079,7 @@ private fun AddSmbPanel(
                                     val listResult = when (connected.type) {
                                         SourceType.WEBDAV -> webDavRepository.list(connected, connected.path)
                                         SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.list(connected, connected.path)
+                                        SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.list(connected, connected.path)
                                         else -> com.outfuseplayer.data.remote.RemoteActionResult<List<RemoteEntry>>(false, "暂不支持该来源类型", emptyList())
                                     }
                                     remoteEntries = listResult.value.orEmpty()
@@ -1985,6 +2154,7 @@ private fun AddSmbPanel(
                                 val result = when (config.type) {
                                     SourceType.WEBDAV -> webDavRepository.list(config, entry.path)
                                     SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.list(config, entry.path)
+                                    SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.list(config, entry.path)
                                     else -> com.outfuseplayer.data.remote.RemoteActionResult<List<RemoteEntry>>(false, "暂不支持该来源类型", emptyList())
                                 }
                                 remoteEntries = result.value.orEmpty()
@@ -2008,6 +2178,150 @@ private fun AddSmbPanel(
             }
         }
     }
+    oauthUrl?.let { url ->
+        OAuthWebLoginDialog(
+            url = url,
+            redirectUri = oauthConfig?.oauthRedirectUri.orEmpty(),
+            expectedState = oauthState,
+            onDismiss = {
+                oauthUrl = null
+                oauthConfig = null
+                oauthState = ""
+            },
+            onCode = { code ->
+                val config = oauthConfig ?: return@OAuthWebLoginDialog
+                oauthUrl = null
+                oauthConfig = null
+                oauthState = ""
+                scope.launch {
+                    busy = true
+                    status = "正在换取 ${config.type.remoteTypeLabel()} Access Token"
+                    val result = cloudDriveRepository.exchangeOAuthCode(config, code)
+                    result.value?.let { authorized ->
+                        remoteToken = authorized.token
+                        remoteRefreshToken = authorized.refreshToken
+                        remoteUserId = authorized.userId
+                        publishRemoteSource(authorized, SourceHealth.ONLINE, "OAuth 已授权")
+                        val listResult = when (authorized.type) {
+                            SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.list(authorized, authorized.path)
+                            else -> com.outfuseplayer.data.remote.RemoteActionResult<List<RemoteEntry>>(false, "暂不支持该来源类型", emptyList())
+                        }
+                        remoteEntries = listResult.value.orEmpty()
+                        status = listResult.message.takeIf { listResult.success } ?: result.message
+                    } ?: run {
+                        status = result.message
+                    }
+                    busy = false
+                }
+            },
+            onError = { message ->
+                status = message
+                oauthUrl = null
+                oauthConfig = null
+                oauthState = ""
+            }
+        )
+    }
+}
+
+@Composable
+private fun OAuthWebLoginDialog(
+    url: String,
+    redirectUri: String,
+    expectedState: String,
+    onDismiss: () -> Unit,
+    onCode: (String) -> Unit,
+    onError: (String) -> Unit
+) {
+    var currentUrl by remember(url) { mutableStateOf(url) }
+    var completed by remember(url) { mutableStateOf(false) }
+
+    fun handleUrl(target: String): Boolean {
+        if (completed) return true
+        currentUrl = target
+        val uri = runCatching { Uri.parse(target) }.getOrNull() ?: return false
+        val error = uri.getQueryParameter("error") ?: target.fragmentParameter("error")
+        if (!error.isNullOrBlank()) {
+            completed = true
+            onError("OAuth 授权失败：$error")
+            return true
+        }
+        val code = uri.getQueryParameter("code") ?: target.fragmentParameter("code")
+        if (!code.isNullOrBlank()) {
+            val state = uri.getQueryParameter("state") ?: target.fragmentParameter("state")
+            if (state != null && expectedState.isNotBlank() && state != expectedState) {
+                completed = true
+                onError("OAuth state 校验失败，请重新授权。")
+                return true
+            }
+            completed = true
+            onCode(code)
+            return true
+        }
+        return redirectUri.isNotBlank() && target.startsWith(redirectUri, ignoreCase = true)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("网盘网页登录授权") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    currentUrl,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(520.dp),
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                                    handleUrl(request.url.toString())
+
+                                @Deprecated("Deprecated in Java")
+                                override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
+                                    handleUrl(url)
+
+                                override fun onPageFinished(view: WebView, url: String) {
+                                    handleUrl(url)
+                                }
+                            }
+                            loadUrl(url)
+                        }
+                    },
+                    update = { view ->
+                        if (view.url == null) view.loadUrl(url)
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+private fun String.fragmentParameter(name: String): String? {
+    val fragment = substringAfter('#', missingDelimiterValue = "")
+    if (fragment.isBlank()) return null
+    return fragment.split('&')
+        .mapNotNull { part ->
+            val key = part.substringBefore('=', "")
+            val value = part.substringAfter('=', "")
+            if (key == name) Uri.decode(value) else null
+        }
+        .firstOrNull()
 }
 
 @Composable
@@ -2609,6 +2923,8 @@ private fun SourceTypeSelector(
         SourceTile("本机目录", "手机/平板", Icons.Outlined.Folder, SoftTeal, SourceType.LOCAL),
         SourceTile("SMB / NAS", "文件共享", Icons.Outlined.Storage, ElectricBlue, SourceType.SMB),
         SourceTile("WebDAV", "云盘/NAS", Icons.Outlined.Cloud, PrimaryOrange, SourceType.WEBDAV),
+        SourceTile("百度网盘", "开放平台", Icons.Outlined.Cloud, Color(0xFF4B7BFF), SourceType.BAIDU_NETDISK),
+        SourceTile("阿里网盘", "Drive ID", Icons.Outlined.Cloud, Color(0xFFFF8A3D), SourceType.ALIYUN_DRIVE),
         SourceTile("Jellyfin", "媒体服务器", Icons.Outlined.Dns, PrimaryAmber, SourceType.JELLYFIN),
         SourceTile("Emby", "媒体服务器", Icons.Outlined.Dns, Color(0xFF9E8CFF), SourceType.EMBY)
     )
@@ -2713,6 +3029,8 @@ private fun SourceTypeRail(contentPadding: PaddingValues = PaddingValues(horizon
         SourceTile("本机目录", "系统媒体/文件夹", Icons.Outlined.Folder, SoftTeal),
         SourceTile("SMB / NAS", "已接入 SMBJ", Icons.Outlined.Storage, ElectricBlue),
         SourceTile("WebDAV", "已支持浏览/扫描", Icons.Outlined.Cloud, PrimaryOrange),
+        SourceTile("百度网盘", "Token 浏览/扫描", Icons.Outlined.Cloud, Color(0xFF4B7BFF)),
+        SourceTile("阿里网盘", "Token + Drive ID", Icons.Outlined.Cloud, Color(0xFFFF8A3D)),
         SourceTile("Jellyfin", "已支持登录/直连", Icons.Outlined.Dns, PrimaryAmber),
         SourceTile("Emby", "已支持登录/直连", Icons.Outlined.Dns, Color(0xFF9E8CFF)),
         SourceTile("Plex", "二期扩展", Icons.Outlined.Dns, Color(0xFF9E8CFF)),
@@ -2795,7 +3113,7 @@ private data class SourceTile(
 private const val INTERNAL_LOCAL_SOURCE_ID = "local"
 
 private fun SourceType.isRemoteConfigType(): Boolean =
-    this == SourceType.WEBDAV || isMediaServerType()
+    this == SourceType.WEBDAV || isMediaServerType() || this == SourceType.BAIDU_NETDISK || this == SourceType.ALIYUN_DRIVE
 
 private fun SourceType.isMediaServerType(): Boolean =
     this == SourceType.JELLYFIN || this == SourceType.EMBY
@@ -2804,6 +3122,8 @@ private fun SourceType.remoteTypeLabel(): String = when (this) {
     SourceType.WEBDAV -> "WebDAV"
     SourceType.EMBY -> "Emby"
     SourceType.JELLYFIN -> "Jellyfin"
+    SourceType.BAIDU_NETDISK -> "百度网盘"
+    SourceType.ALIYUN_DRIVE -> "阿里网盘"
     else -> name
 }
 

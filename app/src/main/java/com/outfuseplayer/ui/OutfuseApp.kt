@@ -41,6 +41,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface as MaterialSurface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -79,6 +80,10 @@ import com.outfuseplayer.data.smb.toRemotePath
 import com.outfuseplayer.data.smb.toSmbUri
 import com.outfuseplayer.data.remote.RemoteConfigStore
 import com.outfuseplayer.data.remote.RemoteSourceRegistry
+import com.outfuseplayer.data.remote.CloudDriveRepository
+import com.outfuseplayer.data.remote.JellyfinRepository
+import com.outfuseplayer.data.remote.RemoteActionResult
+import com.outfuseplayer.data.remote.RemoteSourceConfig
 import com.outfuseplayer.data.remote.WebDavRepository
 import com.outfuseplayer.data.remote.WebDavUriScheme
 import com.outfuseplayer.model.LibraryItem
@@ -97,6 +102,9 @@ import com.outfuseplayer.ui.screens.SearchScreen
 import com.outfuseplayer.ui.screens.SettingsScreen
 import com.outfuseplayer.ui.screens.SourceScanUiState
 import com.outfuseplayer.ui.screens.SourceScreen
+import com.outfuseplayer.ui.i18n.LocalUiStrings
+import com.outfuseplayer.ui.i18n.UiStrings
+import com.outfuseplayer.ui.i18n.stringsForLanguage
 import com.outfuseplayer.ui.theme.Obsidian
 import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.Surface
@@ -115,14 +123,21 @@ import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
 
 private enum class RootDestination(
-    val label: String,
     val icon: ImageVector
 ) {
-    HOME("首页", Icons.Outlined.Home),
-    LIBRARY("媒体库", Icons.Outlined.VideoLibrary),
-    SEARCH("搜索", Icons.Outlined.Search),
-    SOURCES("来源", Icons.Outlined.Storage),
-    SETTINGS("设置", Icons.Outlined.Settings)
+    HOME(Icons.Outlined.Home),
+    LIBRARY(Icons.Outlined.VideoLibrary),
+    SEARCH(Icons.Outlined.Search),
+    SOURCES(Icons.Outlined.Storage),
+    SETTINGS(Icons.Outlined.Settings)
+}
+
+private fun RootDestination.label(strings: UiStrings): String = when (this) {
+    RootDestination.HOME -> strings.home
+    RootDestination.LIBRARY -> strings.library
+    RootDestination.SEARCH -> strings.search
+    RootDestination.SOURCES -> strings.sources
+    RootDestination.SETTINGS -> strings.settings
 }
 
 private val BundledDemoItemIds = setOf(
@@ -145,6 +160,15 @@ private fun LibraryItem.isBundledDemoItem(): Boolean =
 
 private fun MediaSource.isBundledDemoSource(): Boolean =
     id in BundledDemoSourceIds && credentialsRef?.startsWith("keystore:", ignoreCase = true) == true
+
+private fun SourceType.remoteTypeLabel(): String = when (this) {
+    SourceType.WEBDAV -> "WebDAV"
+    SourceType.JELLYFIN -> "Jellyfin"
+    SourceType.EMBY -> "Emby"
+    SourceType.BAIDU_NETDISK -> "百度网盘"
+    SourceType.ALIYUN_DRIVE -> "阿里网盘"
+    else -> name
+}
 
 private data class LibraryDelta(
     val added: Int = 0,
@@ -172,10 +196,12 @@ fun OutfuseApp() {
     }
 
     OutfuseTheme(darkTheme = appSettings.darkTheme) {
-        OutfuseAppContent(
-            appSettings = appSettings,
-            onSettingsChange = { updateSettings(it) }
-        )
+        CompositionLocalProvider(LocalUiStrings provides stringsForLanguage(appSettings.interfaceLanguage)) {
+            OutfuseAppContent(
+                appSettings = appSettings,
+                onSettingsChange = { updateSettings(it) }
+            )
+        }
     }
 }
 
@@ -200,6 +226,8 @@ private fun OutfuseAppContent(
     val remoteConfigStore = remember { RemoteConfigStore(context) }
     val smbRepository = remember { SmbRepository() }
     val webDavRepository = remember { WebDavRepository() }
+    val jellyfinRepository = remember { JellyfinRepository() }
+    val cloudDriveRepository = remember { CloudDriveRepository() }
     val localMediaRepository = remember { LocalMediaRepository(context) }
     val nfoMetadataRepository = remember { NfoMetadataRepository(context) }
     val playbackPositionStore = remember { PlaybackPositionStore(context) }
@@ -734,53 +762,157 @@ private fun OutfuseAppContent(
         }
     }
 
-    fun refreshCurrentLibrary() {
-        if (appSettings.quickSyncDeletedFiles) {
-            syncDeletedFilesQuick()
-        }
-        val config = smbConfigStore.takeIf { it.hasSaved() }?.loadLast()
-        val localSources = mediaSources.filter {
-            it.type == SourceType.LOCAL && it.id != "local" && it.baseUri != null
-        }
-        if (config != null) {
-            val forceRepairScan = shouldRunRepairScan(config)
-            if (forceRepairScan) {
-                libraryNotice = "检测到媒体库可能缺项，本次将执行修复全量扫描。"
-            }
-            startBackgroundScan(config, forceFullScan = forceRepairScan)
-        } else if (localSources.isNotEmpty()) {
-            scope.launch {
-                libraryNotice = "正在刷新本机目录媒体库"
-                localSources.forEach { source ->
-                    putSource(source.copy(health = SourceHealth.SYNCING, detail = "正在扫描本机目录"))
-                    val items = withContext(Dispatchers.IO) {
-                        val baseUri = source.baseUri.orEmpty()
-                        if (source.id == LocalMediaRepository.LOCAL_SOURCE_ID) {
-                            localMediaRepository.scan()
-                        } else {
-                            val uri = Uri.parse(baseUri)
-                            localMediaRepository.scanTree(uri, source.id, source.name)
+    fun scanRemoteConfig(config: RemoteSourceConfig) {
+        scope.launch {
+            putSource(config.toMediaSource(SourceHealth.SYNCING, "正在刷新 ${config.type.remoteTypeLabel()}"))
+            persistSourceSnapshot()
+            val scannedPaths = LinkedHashSet<String>()
+            var scannedDelta = LibraryDelta()
+            val result: RemoteActionResult<Int> = when (config.type) {
+                SourceType.WEBDAV -> webDavRepository.scanMedia(
+                    config = config,
+                    onProgress = { scanned, pending, found, current ->
+                        withContext(Dispatchers.Main) {
+                            libraryNotice = "正在刷新 ${config.name.ifBlank { "WebDAV" }}：$found 个媒体 · $scanned 个目录 · 待扫描 $pending · $current"
+                        }
+                    },
+                    onBatch = { batch ->
+                        withContext(Dispatchers.Main) {
+                            batch.forEach { scannedPaths += it.path }
+                            scannedDelta += mergeMediaItems(batch)
                         }
                     }
-                    val delta = reconcileCompletedSourceScan(source.id, items)
-                    val videos = items.count { it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
-                    val images = items.count { it.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE }
-                    putSource(source.copy(health = SourceHealth.ONLINE, detail = "$videos 个视频 · $images 张图片 · ${delta.toScanChangeText()}"))
-                }
-                persistSourceSnapshot()
-                persistLibrarySnapshotNow()
-                libraryNotice = "本机目录媒体库刷新完成"
+                )
+                SourceType.JELLYFIN, SourceType.EMBY -> jellyfinRepository.scanMedia(
+                    config = config,
+                    onProgress = { scanned, found ->
+                        withContext(Dispatchers.Main) {
+                            libraryNotice = "正在刷新 ${config.type.remoteTypeLabel()}：$found 个媒体 · 已读取 $scanned 个条目"
+                        }
+                    },
+                    onBatch = { batch ->
+                        withContext(Dispatchers.Main) {
+                            batch.forEach { scannedPaths += it.path }
+                            scannedDelta += mergeMediaItems(batch)
+                        }
+                    }
+                )
+                SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> cloudDriveRepository.scanMedia(
+                    config = config,
+                    onProgress = { scanned, pending, found, current ->
+                        withContext(Dispatchers.Main) {
+                            libraryNotice = "正在刷新 ${config.type.remoteTypeLabel()}：$found 个媒体 · $scanned 个目录 · 待扫描 $pending · $current"
+                        }
+                    },
+                    onBatch = { batch ->
+                        withContext(Dispatchers.Main) {
+                            batch.forEach { scannedPaths += it.path }
+                            scannedDelta += mergeMediaItems(batch)
+                        }
+                    }
+                )
+                else -> RemoteActionResult(false, "该来源暂不支持刷新")
             }
-        } else {
-            libraryNotice = "当前没有可刷新的 SMB/NAS 或本机目录来源。"
+            val finalDelta = if (result.success) {
+                scannedDelta + removeMissingItemsFromSource(config.sourceId, scannedPaths)
+            } else {
+                LibraryDelta()
+            }
+            putSource(
+                config.toMediaSource(
+                    health = if (result.success) SourceHealth.ONLINE else SourceHealth.OFFLINE,
+                    detail = if (result.success) "${result.message} · ${finalDelta.toScanChangeText()}" else "刷新失败：${result.message}"
+                )
+            )
+            persistSourceSnapshot()
+            if (result.success) persistLibrarySnapshotNow()
+            libraryNotice = if (result.success) {
+                "${config.name.ifBlank { config.type.remoteTypeLabel() }} 刷新完成：${finalDelta.toScanChangeText()}"
+            } else {
+                "${config.name.ifBlank { config.type.remoteTypeLabel() }} 刷新失败：${result.message}"
+            }
         }
     }
 
-    fun refreshMetadata() {
-        val snapshot = libraryItems.toList().filter { it.streamUrl != null }
-        val total = snapshot.size.coerceAtLeast(1)
+    fun refreshLocalSource(source: MediaSource) {
         scope.launch {
-            metadataState = MetadataMatchUiState("全部媒体库", 0, total, true, "正在读取本地 NFO")
+            libraryNotice = "正在刷新 ${source.name}"
+            putSource(source.copy(health = SourceHealth.SYNCING, detail = "正在扫描本机目录"))
+            val items = withContext(Dispatchers.IO) {
+                val baseUri = source.baseUri.orEmpty()
+                if (source.id == LocalMediaRepository.LOCAL_SOURCE_ID || !baseUri.contains("/tree/")) {
+                    localMediaRepository.scan()
+                } else {
+                    localMediaRepository.scanTree(Uri.parse(baseUri), source.id, source.name)
+                }
+            }
+            val delta = reconcileCompletedSourceScan(source.id, items)
+            val videos = items.count { it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
+            val images = items.count { it.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE }
+            putSource(source.copy(health = SourceHealth.ONLINE, detail = "$videos 个视频 · $images 张图片 · ${delta.toScanChangeText()}"))
+            persistSourceSnapshot()
+            persistLibrarySnapshotNow()
+            libraryNotice = "${source.name} 刷新完成：${delta.toScanChangeText()}"
+        }
+    }
+
+    fun smbConfigForSource(sourceId: String): SmbConfig? {
+        SmbCredentialRegistry.find(sourceId)?.let { return it }
+        return smbConfigStore.takeIf { it.hasSaved() }
+            ?.loadLast()
+            ?.takeIf { it.sourceId == sourceId }
+    }
+
+    fun refreshCurrentLibrary(sourceId: String? = null) {
+        if (appSettings.quickSyncDeletedFiles) {
+            syncDeletedFilesQuick(sourceId)
+        }
+        val targets = if (sourceId == null) {
+            mediaSources.filter { it.enabled && it.id != "local" }
+        } else {
+            mediaSources.filter { it.id == sourceId }
+        }
+        if (targets.isEmpty()) {
+            libraryNotice = if (sourceId == null) "当前没有可刷新的来源。" else "未找到所选媒体库来源。"
+            return
+        }
+        targets.forEach { source ->
+            when (source.type) {
+                SourceType.LOCAL -> refreshLocalSource(source)
+                SourceType.SMB -> {
+                    val config = smbConfigForSource(source.id)
+                    if (config == null) {
+                        libraryNotice = "${source.name} 缺少 SMB 登录信息，请在来源页编辑后保存。"
+                    } else {
+                        val forceRepairScan = shouldRunRepairScan(config)
+                        if (forceRepairScan) {
+                            libraryNotice = "检测到 ${source.name} 可能缺项，本次将执行修复全量扫描。"
+                        }
+                        startBackgroundScan(config, forceFullScan = forceRepairScan)
+                    }
+                }
+                SourceType.WEBDAV, SourceType.JELLYFIN, SourceType.EMBY, SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> {
+                    val config = remoteConfigStore.find(source.id)
+                    if (config == null) {
+                        libraryNotice = "${source.name} 缺少来源配置，请在来源页编辑后保存。"
+                    } else {
+                        RemoteSourceRegistry.register(config)
+                        scanRemoteConfig(config)
+                    }
+                }
+                else -> {
+                    libraryNotice = "${source.name} 暂不支持刷新。"
+                }
+            }
+        }
+    }
+
+    fun refreshMetadata(sourceId: String? = null) {
+        val snapshot = libraryItems.toList().filter { it.streamUrl != null && (sourceId == null || it.sourceId == sourceId) }
+        val total = snapshot.size.coerceAtLeast(1)
+        val targetLabel = sourceId?.let { id -> mediaSources.firstOrNull { it.id == id }?.name } ?: "全部媒体库"
+        scope.launch {
+            metadataState = MetadataMatchUiState(targetLabel, 0, total, true, "正在刷新元数据")
             var current = 0
             var matched = 0
             snapshot.forEach { item ->
@@ -796,7 +928,7 @@ private fun OutfuseAppContent(
                 }
                 current++
                 if (current == total || current % 8 == 0) {
-                    metadataState = MetadataMatchUiState("全部媒体库", current, total, true, "NFO 匹配中：已命中 $matched 个")
+                    metadataState = MetadataMatchUiState(targetLabel, current, total, true, "元数据匹配中：已命中 $matched 个")
                 }
             }
             if (matched > 0) {
@@ -804,11 +936,11 @@ private fun OutfuseAppContent(
                 persistLibrarySnapshot()
             }
             libraryNotice = if (matched > 0) {
-                "NFO 元数据刷新完成：更新 $matched 个媒体"
+                "$targetLabel 元数据刷新完成：更新 $matched 个媒体"
             } else {
-                "未发现同目录 NFO 元数据"
+                "$targetLabel 未发现可更新的元数据"
             }
-            metadataState = MetadataMatchUiState("全部媒体库", total, total, false, libraryNotice ?: "NFO 刷新完成")
+            metadataState = MetadataMatchUiState(targetLabel, total, total, false, libraryNotice ?: "元数据刷新完成")
             delay(1800)
             metadataState = null
         }
@@ -1224,8 +1356,8 @@ private fun AppContent(
     onSourceAdded: (com.outfuseplayer.model.MediaSource) -> Unit,
     onSourceDeleted: (String) -> Unit,
     onStartSourceScan: (SmbConfig) -> Unit,
-    onRefreshLibrary: () -> Unit,
-    onRefreshMetadata: () -> Unit,
+    onRefreshLibrary: (String?) -> Unit,
+    onRefreshMetadata: (String?) -> Unit,
     onFileAction: (FileActionRequest) -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
     onMediaRemoved: (String, List<String>) -> Unit,
@@ -1281,7 +1413,7 @@ private fun AppContent(
                         expanded = expanded,
                         sources = managedSources,
                         onOpenSources = onOpenSources,
-                        onRefreshLibrary = onRefreshLibrary
+                        onRefreshLibrary = { onRefreshLibrary(null) }
                     )
                     return
                 }
@@ -1364,6 +1496,7 @@ private fun AppContent(
 private fun RestoringLibraryScreen(
     expanded: Boolean
 ) {
+    val strings = LocalUiStrings.current
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1391,12 +1524,12 @@ private fun RestoringLibraryScreen(
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "正在恢复媒体库",
+                        text = strings.text("正在恢复媒体库"),
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "正在读取已保存来源和本地媒体库缓存。",
+                        text = strings.text("正在读取已保存来源和本地媒体库缓存。"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1413,6 +1546,7 @@ private fun ExistingSourcesEmptyLibraryScreen(
     onOpenSources: () -> Unit,
     onRefreshLibrary: () -> Unit
 ) {
+    val strings = LocalUiStrings.current
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1434,12 +1568,16 @@ private fun ExistingSourcesEmptyLibraryScreen(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "已恢复 ${sources.size} 个来源",
+                        text = if (strings.languageCode == "en-US") {
+                            "Restored ${sources.size} sources"
+                        } else {
+                            "已恢复 ${sources.size} 个来源"
+                        },
                         style = MaterialTheme.typography.headlineMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "媒体库当前为空。不会自动重新扫描，你可以进入来源确认状态，或手动刷新媒体库。",
+                        text = strings.text("媒体库当前为空。不会自动重新扫描，你可以进入来源确认状态，或手动刷新媒体库。"),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1450,7 +1588,11 @@ private fun ExistingSourcesEmptyLibraryScreen(
                     }
                     if (sources.size > 5) {
                         Text(
-                            text = "还有 ${sources.size - 5} 个来源，可在来源页查看。",
+                            text = if (strings.languageCode == "en-US") {
+                                "${sources.size - 5} more sources are available on the Sources page."
+                            } else {
+                                "还有 ${sources.size - 5} 个来源，可在来源页查看。"
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = TextMuted
                         )
@@ -1466,13 +1608,13 @@ private fun ExistingSourcesEmptyLibraryScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("查看来源")
+                        Text(strings.text("查看来源"))
                     }
                     OutlinedButton(
                         onClick = onRefreshLibrary,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("刷新媒体库")
+                        Text(strings.text("刷新媒体库"))
                     }
                 }
             }
@@ -1482,11 +1624,12 @@ private fun ExistingSourcesEmptyLibraryScreen(
 
 @Composable
 private fun RestoredSourceRow(source: MediaSource) {
+    val strings = LocalUiStrings.current
     val statusText = when (source.health) {
-        SourceHealth.ONLINE -> "在线"
-        SourceHealth.SYNCING -> "扫描中"
-        SourceHealth.OFFLINE -> "需刷新"
-        SourceHealth.NEEDS_AUTH -> "需认证"
+        SourceHealth.ONLINE -> strings.text("在线")
+        SourceHealth.SYNCING -> strings.text("扫描中")
+        SourceHealth.OFFLINE -> strings.text("需刷新")
+        SourceHealth.NEEDS_AUTH -> strings.text("需认证")
     }
     val statusColor = when (source.health) {
         SourceHealth.ONLINE -> PrimaryOrange
@@ -1540,6 +1683,7 @@ private fun FirstRunGuideScreen(
     onAddSource: () -> Unit,
     onDismissIntro: () -> Unit
 ) {
+    val strings = LocalUiStrings.current
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1575,12 +1719,12 @@ private fun FirstRunGuideScreen(
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = if (showIntro) "欢迎使用 outfuse" else "媒体库还是空的",
+                        text = if (showIntro) strings.text("欢迎使用 outfuse") else strings.text("媒体库还是空的"),
                         style = MaterialTheme.typography.headlineMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "先添加本机目录、NAS/SMB 或 WebDAV/Jellyfin 来源。扫描完成后，首页会显示最近播放、最近添加、全部媒体和自建系列。",
+                        text = strings.text("先添加本机目录、NAS/SMB 或 WebDAV/Jellyfin 来源。扫描完成后，首页会显示最近播放、最近添加、全部媒体和自建系列。"),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1588,18 +1732,18 @@ private fun FirstRunGuideScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     GuideStep(
                         icon = Icons.Outlined.Folder,
-                        title = "1. 添加来源",
-                        description = "进入来源页，保存 SMB / NAS 配置后会在后台扫描媒体。"
+                        title = strings.text("1. 添加来源"),
+                        description = strings.text("进入来源页，保存 SMB / NAS 配置后会在后台扫描媒体。")
                     )
                     GuideStep(
                         icon = Icons.Outlined.Sync,
-                        title = "2. 等待扫描",
-                        description = "扫描进度会显示当前目录、视频数量和图片数量。"
+                        title = strings.text("2. 等待扫描"),
+                        description = strings.text("扫描进度会显示当前目录、视频数量和图片数量。")
                     )
                     GuideStep(
                         icon = Icons.Outlined.PlayArrow,
-                        title = "3. 浏览与播放",
-                        description = "媒体库会生成缩略图，并支持排序、筛选、随机播放和播放列表。"
+                        title = strings.text("3. 浏览与播放"),
+                        description = strings.text("媒体库会生成缩略图，并支持排序、筛选、随机播放和播放列表。")
                     )
                 }
                 Row(
@@ -1612,17 +1756,21 @@ private fun FirstRunGuideScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("去添加来源")
+                        Text(strings.text("去添加来源"))
                     }
                     if (showIntro) {
                         OutlinedButton(onClick = onDismissIntro) {
-                            Text("知道了")
+                            Text(strings.text("知道了"))
                         }
                     }
                 }
                 if (sourceCount > 0) {
                     Text(
-                        text = "已添加 $sourceCount 个来源，若媒体库仍为空，可以在来源页点击刷新或重新扫描。",
+                        text = if (strings.languageCode == "en-US") {
+                            "$sourceCount sources added. If the library is still empty, refresh or rescan from Sources."
+                        } else {
+                            "已添加 $sourceCount 个来源，若媒体库仍为空，可以在来源页点击刷新或重新扫描。"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         color = TextMuted
                     )
@@ -1656,16 +1804,18 @@ private fun AppBottomBar(
     selectedRoot: RootDestination,
     onSelected: (RootDestination) -> Unit
 ) {
+    val strings = LocalUiStrings.current
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
         tonalElevation = NavigationBarDefaults.Elevation
     ) {
         RootDestination.entries.forEach { item ->
+            val label = item.label(strings)
             NavigationBarItem(
                 selected = item == selectedRoot,
                 onClick = { onSelected(item) },
-                icon = { Icon(item.icon, contentDescription = item.label) },
-                label = { Text(item.label) },
+                icon = { Icon(item.icon, contentDescription = label) },
+                label = { Text(label) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = PrimaryOrange,
                     selectedTextColor = PrimaryOrange,
@@ -1683,6 +1833,7 @@ private fun AppNavigationRail(
     selectedRoot: RootDestination,
     onSelected: (RootDestination) -> Unit
 ) {
+    val strings = LocalUiStrings.current
     NavigationRail(
         modifier = Modifier
             .safeDrawingPadding()
@@ -1691,11 +1842,12 @@ private fun AppNavigationRail(
         contentColor = MaterialTheme.colorScheme.onSurface
     ) {
         RootDestination.entries.forEach { item ->
+            val label = item.label(strings)
             NavigationRailItem(
                 selected = item == selectedRoot,
                 onClick = { onSelected(item) },
-                icon = { Icon(item.icon, contentDescription = item.label) },
-                label = { Text(item.label) },
+                icon = { Icon(item.icon, contentDescription = label) },
+                label = { Text(label) },
                 colors = NavigationRailItemDefaults.colors(
                     selectedIconColor = PrimaryOrange,
                     selectedTextColor = PrimaryOrange,

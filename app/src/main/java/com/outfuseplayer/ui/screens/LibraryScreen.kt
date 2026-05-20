@@ -127,8 +127,8 @@ fun LibraryScreen(
     onBack: (() -> Unit)? = null,
     onItemClick: (LibraryItem) -> Unit,
     onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit,
-    onRefreshLibrary: (() -> Unit)? = null,
-    onRefreshMetadata: (() -> Unit)? = null,
+    onRefreshLibrary: ((String?) -> Unit)? = null,
+    onRefreshMetadata: ((String?) -> Unit)? = null,
     onCreateSeries: (String, List<LibraryItem>) -> Unit = { _, _ -> },
     onFileAction: (FileActionRequest) -> Unit = {}
 ) {
@@ -275,8 +275,8 @@ fun LibraryScreen(
                 if (!selectionMode) selectedIds = emptyList()
             },
             onCreateSeriesFromSelection = { createSeriesDialogVisible = true },
-            onRefreshLibrary = onRefreshLibrary,
-            onRefreshMetadata = onRefreshMetadata
+            onRefreshLibrary = onRefreshLibrary?.let { refresh -> { refresh(sourceFilterId) } },
+            onRefreshMetadata = onRefreshMetadata?.let { refresh -> { refresh(sourceFilterId) } }
         )
         if (layout == MediaLayout.LIST) {
             LibraryList(
@@ -1003,7 +1003,7 @@ private fun LibraryItem.navigationLabel(sort: MediaSort): String = when (sort) {
 
 private fun navigationLabels(items: List<LibraryItem>, sort: MediaSort, ascending: Boolean): List<String> {
     val values = items.map { it.navigationLabel(sort) }.distinct().take(36)
-    return (if (ascending) values else values.asReversed()).ifEmpty { listOf("全") }
+    return values.ifEmpty { listOf("全") }
 }
 
 private val MediaLayout.icon: ImageVector

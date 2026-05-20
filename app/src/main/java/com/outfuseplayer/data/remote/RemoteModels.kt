@@ -21,7 +21,13 @@ data class RemoteSourceConfig(
     val password: String = "",
     val token: String = "",
     val path: String = "",
-    val userId: String = ""
+    val userId: String = "",
+    val oauthClientId: String = "",
+    val oauthClientSecret: String = "",
+    val oauthRedirectUri: String = "",
+    val oauthScope: String = "",
+    val refreshToken: String = "",
+    val tokenExpiresAt: Long = 0L
 ) {
     val sourceId: String
         get() {
@@ -30,7 +36,18 @@ data class RemoteSourceConfig(
                 .replace(Regex("""[^a-z0-9]+"""), "-")
                 .trim('-')
                 .take(72)
-            return "${type.name.lowercase(Locale.US)}-${normalized.ifBlank { "source" }}"
+            val account = when (type) {
+                SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> userId.ifBlank { username }.ifBlank { name }
+                else -> ""
+            }
+                .lowercase(Locale.US)
+                .replace(Regex("""[^a-z0-9]+"""), "-")
+                .trim('-')
+                .take(28)
+            val suffix = listOf(normalized.ifBlank { "source" }, account)
+                .filter { it.isNotBlank() }
+                .joinToString("-")
+            return "${type.name.lowercase(Locale.US)}-$suffix"
         }
 
     fun normalizedBaseUrl(): String = baseUrl.trim().trimEnd('/')
@@ -51,6 +68,8 @@ data class RemoteSourceConfig(
                 SourceType.WEBDAV -> "WebDAV"
                 SourceType.JELLYFIN -> "Jellyfin"
                 SourceType.EMBY -> "Emby"
+                SourceType.BAIDU_NETDISK -> "百度网盘"
+                SourceType.ALIYUN_DRIVE -> "阿里网盘"
                 else -> type.name
             }
         },
@@ -99,6 +118,7 @@ fun RemoteSourceConfig.toLibraryItem(entry: RemoteEntry): LibraryItem {
     val stream = when (type) {
         SourceType.WEBDAV -> toWebDavUri(entry.path)
         SourceType.JELLYFIN, SourceType.EMBY -> entry.extra["streamUrl"] ?: entry.extra["imageUrl"]
+        SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> entry.extra["streamUrl"] ?: entry.extra["downloadUrl"] ?: entry.extra["imageUrl"]
         else -> null
     }
     val poster = entry.extra["imageUrl"].takeUnless { it.isNullOrBlank() }

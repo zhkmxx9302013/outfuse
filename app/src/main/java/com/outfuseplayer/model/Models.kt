@@ -25,7 +25,9 @@ enum class SourceType {
     EMBY,
     GOOGLE_DRIVE,
     ONEDRIVE,
-    DROPBOX
+    DROPBOX,
+    BAIDU_NETDISK,
+    ALIYUN_DRIVE
 }
 
 enum class SourceHealth {

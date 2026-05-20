@@ -18,15 +18,21 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Button
@@ -39,6 +45,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,10 +58,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import com.outfuseplayer.data.AppSettings
 import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.data.ThumbnailRepository
+import com.outfuseplayer.ui.i18n.LanguageChoice
+import com.outfuseplayer.ui.i18n.LocalUiStrings
+import com.outfuseplayer.ui.i18n.stringsForLanguage
 import com.outfuseplayer.ui.theme.Danger
 import com.outfuseplayer.ui.theme.ElectricBlue
 import com.outfuseplayer.ui.theme.PrimaryAmber
@@ -70,19 +82,33 @@ fun SettingsScreen(
     onSettingsChange: (AppSettings) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val strings = LocalUiStrings.current
     val store = remember { SettingsStore(context) }
     var currentSettings by remember { mutableStateOf(settings ?: store.load()) }
-    var notice by remember { mutableStateOf("设置会立即保存到本机，下次打开应用仍会保留。") }
+    var notice by remember { mutableStateOf(strings.settingsNoticeDefault) }
+    var showHelp by remember { mutableStateOf(false) }
 
     LaunchedEffect(settings) {
         settings?.let { currentSettings = it }
+    }
+
+    LaunchedEffect(strings.languageCode) {
+        notice = strings.settingsNoticeDefault
     }
 
     fun update(next: AppSettings, message: String) {
         currentSettings = next
         if (settings == null) store.save(next)
         onSettingsChange(next)
-        notice = message
+        notice = strings.text(message)
+    }
+
+    if (showHelp) {
+        HelpGuideScreen(
+            expanded = expanded,
+            onBack = { showHelp = false }
+        )
+        return
     }
 
     LazyColumn(
@@ -99,11 +125,48 @@ fun SettingsScreen(
         }
         item {
             SettingsSection(
+                title = strings.text("帮助与使用说明"),
+                icon = Icons.Outlined.HelpOutline,
+                tint = SoftTeal,
+                expanded = expanded
+            ) {
+                Text(
+                    strings.helpDescription,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    onClick = { showHelp = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(7.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                ) {
+                    Icon(Icons.Outlined.HelpOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(strings.openHelp)
+                }
+            }
+        }
+        item {
+            SettingsSection(
                 title = "外观",
                 icon = Icons.Outlined.Palette,
                 tint = PrimaryOrange,
                 expanded = expanded
             ) {
+                LanguageOptionSetting(
+                    title = strings.interfaceLanguage,
+                    subtitle = strings.interfaceLanguageSubtitle,
+                    options = strings.languageChoices,
+                    selected = currentSettings.interfaceLanguage,
+                    onSelected = { language ->
+                        val nextStrings = stringsForLanguage(language)
+                        update(
+                            currentSettings.copy(interfaceLanguage = language),
+                            nextStrings.interfaceLanguageChanged
+                        )
+                    }
+                )
                 ToggleSetting(
                     title = if (currentSettings.darkTheme) "黑色主题" else "白色主题",
                     checked = currentSettings.darkTheme,
@@ -255,6 +318,29 @@ fun SettingsScreen(
                     onCheckedChange = { update(currentSettings.copy(scraperOnlineBangumi = it), if (it) "已启用 Bangumi 候选来源入口" else "已关闭 Bangumi 候选来源") }
                 )
                 ToggleSetting(
+                    title = "IMDb / OMDb",
+                    checked = currentSettings.scraperOnlineImdb,
+                    onCheckedChange = { update(currentSettings.copy(scraperOnlineImdb = it), if (it) "已启用 IMDb / OMDb 元数据来源" else "已关闭 IMDb / OMDb 元数据来源") }
+                )
+                TextValueSetting(
+                    title = "TMDB API Key",
+                    value = currentSettings.tmdbApiKey,
+                    placeholder = "填写 v3 API Key 后，刷新元数据会更新 TMDB 封面与简介",
+                    onValueChange = { update(currentSettings.copy(tmdbApiKey = it), "TMDB API Key 已保存") }
+                )
+                TextValueSetting(
+                    title = "TVDB API Key",
+                    value = currentSettings.tvdbApiKey,
+                    placeholder = "填写 API Key 后作为后续剧集匹配来源",
+                    onValueChange = { update(currentSettings.copy(tvdbApiKey = it), "TVDB API Key 已保存") }
+                )
+                TextValueSetting(
+                    title = "OMDb API Key",
+                    value = currentSettings.omdbApiKey,
+                    placeholder = "用于 IMDb 风格标题、评分、海报和简介",
+                    onValueChange = { update(currentSettings.copy(omdbApiKey = it), "OMDb API Key 已保存") }
+                )
+                ToggleSetting(
                     title = "允许写回源目录",
                     checked = currentSettings.scraperWriteBack,
                     onCheckedChange = {
@@ -265,7 +351,7 @@ fun SettingsScreen(
                     }
                 )
                 Text(
-                    "当前实现会立即使用本地 NFO、同目录封面和媒体服务器已有信息；在线来源作为配置入口保留，后续接入 API Key 后进入候选匹配队列。",
+                    strings.text("刷新元数据会按来源优先级依次读取本地 NFO/封面、媒体服务器已有信息，以及已启用且已填写 Key 的在线来源；Bangumi 可直接尝试公开检索。"),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -326,7 +412,7 @@ fun SettingsScreen(
                     onClick = {
                         ThumbnailRepository.clearMemoryCache()
                         store.markCachesCleared()
-                        notice = "已清理当前缩略图内存缓存，并写入缓存清理标记。"
+                        notice = strings.text("已清理当前缩略图内存缓存，并写入缓存清理标记。")
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(7.dp),
@@ -335,10 +421,14 @@ fun SettingsScreen(
                 ) {
                     Icon(Icons.Outlined.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.size(6.dp))
-                    Text("清理元数据与缩略图缓存")
+                    Text(strings.text("清理元数据与缩略图缓存"))
                 }
                 Text(
-                    "当前缓存：索引 ${currentSettings.metadataCacheLimit} 上限 · 缩略图 ${currentSettings.artworkCacheLimit} 上限",
+                    if (strings.languageCode == "en-US") {
+                        "Current cache limits: metadata ${strings.text(currentSettings.metadataCacheLimit)} · thumbnails ${strings.text(currentSettings.artworkCacheLimit)}"
+                    } else {
+                        "当前缓存：索引 ${currentSettings.metadataCacheLimit} 上限 · 缩略图 ${currentSettings.artworkCacheLimit} 上限"
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -373,10 +463,10 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Outlined.Link, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.size(6.dp))
-                        Text("连接 Trakt")
+                        Text(strings.text("连接 Trakt"))
                     }
                     OutlinedButton(
-                        onClick = { notice = "已触发 Trakt 同步队列；联网授权接入后会同步观看记录。" },
+                        onClick = { notice = strings.text("已触发 Trakt 同步队列；联网授权接入后会同步观看记录。") },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(7.dp),
                         border = BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.72f)),
@@ -384,7 +474,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.size(6.dp))
-                        Text("同步记录")
+                        Text(strings.text("同步记录"))
                     }
                 }
             }
@@ -405,7 +495,7 @@ fun SettingsScreen(
                     OutlinedButton(
                         onClick = {
                             store.clearPlaybackHistory()
-                            notice = "播放历史清除标记已写入；接入 Room 后会同步清理记录。"
+                            notice = strings.text("播放历史清除标记已写入；接入 Room 后会同步清理记录。")
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(7.dp),
@@ -414,7 +504,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Outlined.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.size(6.dp))
-                        Text("清除历史")
+                        Text(strings.text("清除历史"))
                     }
                     Button(
                         onClick = {
@@ -426,7 +516,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Outlined.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.size(6.dp))
-                        Text("恢复默认")
+                        Text(strings.text("恢复默认"))
                     }
                 }
             }
@@ -436,14 +526,15 @@ fun SettingsScreen(
 
 @Composable
 private fun SettingsTopBar(expanded: Boolean) {
+    val strings = LocalUiStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .safeDrawingPadding()
             .padding(horizontal = if (expanded) 32.dp else 20.dp, vertical = 8.dp)
     ) {
-        Text("设置", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-        Text("这里的开关和选项已经可以保存并影响后续功能入口", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(strings.settings, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+        Text(strings.settingsSubtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -467,6 +558,156 @@ private fun SettingsNotice(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun HelpGuideScreen(
+    expanded: Boolean,
+    onBack: () -> Unit
+) {
+    val strings = LocalUiStrings.current
+    val help = strings.helpGuide
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .safeDrawingPadding()
+                    .padding(horizontal = if (expanded) 32.dp else 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                ) {
+                    Icon(Icons.Outlined.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(strings.back)
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(help.title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+                    Text(help.subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        item {
+            HelpSection(
+                expanded = expanded,
+                title = help.quickStartTitle,
+                icon = Icons.Outlined.PlayCircle,
+                tint = PrimaryOrange
+            ) {
+                help.quickStartParagraphs.forEach { HelpParagraph(it) }
+            }
+        }
+        item {
+            HelpSection(
+                expanded = expanded,
+                title = help.sourcesTitle,
+                icon = Icons.Outlined.Storage,
+                tint = ElectricBlue
+            ) {
+                help.sourceParagraphs.forEach { HelpParagraph(it) }
+            }
+        }
+        item {
+            HelpSection(
+                expanded = expanded,
+                title = help.oauthTitle,
+                icon = Icons.Outlined.Cloud,
+                tint = SoftTeal
+            ) {
+                help.oauthParagraphs.forEach { HelpParagraph(it) }
+                HelpLink("百度 OAuth 文档", "https://openauth.baidu.com/doc/doc.html")
+                HelpLink("百度网盘开放平台", "https://pan.baidu.com/union")
+                HelpLink("阿里 PDS Web OAuth 文档", "https://help.aliyun.com/zh/pds/drive-and-photo-service-dev/user-guide/oauth-2-0-access-process-for-web-server-applications")
+                HelpLink("阿里 PDS 移动/桌面 OAuth 文档", "https://help.aliyun.com/zh/pds/drive-and-photo-service-dev/user-guide/oauth-2-0-access-process-for-mobile-applications-and-desktop-applications")
+            }
+        }
+        item {
+            HelpSection(
+                expanded = expanded,
+                title = help.scraperTitle,
+                icon = Icons.Outlined.Language,
+                tint = PrimaryAmber
+            ) {
+                help.scraperParagraphs.forEach { HelpParagraph(it) }
+                HelpLink("TMDB API 文档", "https://developer.themoviedb.org/docs/getting-started")
+                HelpLink("TheTVDB API Key 申请", "https://thetvdb.com/api-information/signup")
+                HelpLink("OMDb API Key", "https://www.omdbapi.com/apikey.aspx")
+                HelpLink("Bangumi API 文档", "https://bangumi.github.io/api/")
+            }
+        }
+        item {
+            HelpSection(
+                expanded = expanded,
+                title = help.libraryTitle,
+                icon = Icons.Outlined.Folder,
+                tint = PrimaryOrange
+            ) {
+                help.libraryParagraphs.forEach { HelpParagraph(it) }
+            }
+        }
+        item {
+            HelpSection(
+                expanded = expanded,
+                title = help.faqTitle,
+                icon = Icons.Outlined.HelpOutline,
+                tint = Danger
+            ) {
+                help.faqParagraphs.forEach { HelpParagraph(it) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HelpSection(
+    expanded: Boolean,
+    title: String,
+    icon: ImageVector,
+    tint: Color,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    SettingsSection(
+        title = title,
+        icon = icon,
+        tint = tint,
+        expanded = expanded,
+        content = content
+    )
+}
+
+@Composable
+private fun HelpParagraph(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+    )
+}
+
+@Composable
+private fun HelpLink(label: String, url: String) {
+    val uriHandler = LocalUriHandler.current
+    val strings = LocalUiStrings.current
+    OutlinedButton(
+        onClick = { uriHandler.openUri(url) },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(7.dp),
+        border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.42f)),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryOrange)
+    ) {
+        Text(strings.text(label), modifier = Modifier.weight(1f))
+        Icon(Icons.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+    }
+}
+
+@Composable
 private fun SettingsSection(
     title: String,
     icon: ImageVector,
@@ -474,6 +715,7 @@ private fun SettingsSection(
     expanded: Boolean,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val strings = LocalUiStrings.current
     Surface(
         modifier = Modifier
             .padding(horizontal = if (expanded) 32.dp else 20.dp)
@@ -490,9 +732,48 @@ private fun SettingsSection(
                 Surface(shape = RoundedCornerShape(7.dp), color = tint.copy(alpha = 0.16f)) {
                     Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.padding(8.dp).size(22.dp))
                 }
-                Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text(strings.text(title), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
             }
             content()
+        }
+    }
+}
+
+@Composable
+private fun LanguageOptionSetting(
+    title: String,
+    subtitle: String,
+    options: List<LanguageChoice>,
+    selected: String,
+    onSelected: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column {
+            Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(options) { option ->
+                val isSelected = selected == option.value
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onSelected(option.value) },
+                    label = { Text(option.label) },
+                    shape = RoundedCornerShape(7.dp),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = isSelected,
+                        borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                        selectedBorderColor = PrimaryOrange.copy(alpha = 0.7f)
+                    ),
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.68f),
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
+                        selectedLabelColor = PrimaryOrange
+                    )
+                )
+            }
         }
     }
 }
@@ -505,17 +786,18 @@ private fun OptionSetting(
     selected: String,
     onSelected: (String) -> Unit
 ) {
+    val strings = LocalUiStrings.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Column {
-            Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
-            Text(subtitle, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(strings.text(title), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(strings.text(subtitle), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(options) { option ->
                 FilterChip(
                     selected = selected == option,
                     onClick = { onSelected(option) },
-                    label = { Text(option) },
+                    label = { Text(strings.text(option)) },
                     shape = RoundedCornerShape(7.dp),
                     border = FilterChipDefaults.filterChipBorder(
                         enabled = true,
@@ -541,13 +823,44 @@ private fun ToggleSetting(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val strings = LocalUiStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        Text(strings.text(title), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun TextValueSetting(
+    title: String,
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit
+) {
+    val strings = LocalUiStrings.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(strings.text(title), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = { Text(strings.text(placeholder)) },
+            singleLine = true,
+            shape = RoundedCornerShape(8.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                cursorColor = PrimaryOrange
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 

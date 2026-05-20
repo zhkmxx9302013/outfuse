@@ -38,34 +38,37 @@ fun LibraryItem.fileTypeLabel(): String = when {
 }
 
 fun List<LibraryItem>.sortedLibraryFor(sort: MediaSort, ascending: Boolean = true): List<LibraryItem> {
-    val sorted = when (sort) {
-        MediaSort.NAME -> sortedBy { it.title.lowercase(Locale.US) }
-        MediaSort.DATE -> sortedWith(compareBy<LibraryItem> { it.modifiedAt.takeIf { value -> value > 0L } ?: ((it.year ?: 0) * 10_000L) }.thenBy { it.title.lowercase(Locale.US) })
-        MediaSort.TYPE -> sortedWith(compareBy<LibraryItem> { it.fileTypeLabel() }.thenBy { it.title.lowercase(Locale.US) })
-        MediaSort.SOURCE -> sortedWith(compareBy<LibraryItem> { it.sourceName.lowercase(Locale.US) }.thenBy { it.title.lowercase(Locale.US) })
+    return when (sort) {
+        MediaSort.NAME -> sortedWith(orderBy<LibraryItem, String>(ascending) { it.title.lowercase(Locale.US) }.thenBy { it.title.lowercase(Locale.US) })
+        MediaSort.DATE -> sortedWith(orderBy<LibraryItem, Long>(ascending) { it.dateSortKey() }.thenBy { it.title.lowercase(Locale.US) })
+        MediaSort.TYPE -> sortedWith(orderBy<LibraryItem, String>(ascending) { it.fileTypeLabel() }.thenBy { it.title.lowercase(Locale.US) })
+        MediaSort.SOURCE -> sortedWith(orderBy<LibraryItem, String>(ascending) { it.sourceName.lowercase(Locale.US) }.thenBy { it.title.lowercase(Locale.US) })
     }
-    return if (ascending) sorted else sorted.asReversed()
 }
 
 fun List<SmbEntry>.sortedEntriesFor(sort: MediaSort, ascending: Boolean = true): List<SmbEntry> {
-    val sorted = when (sort) {
-        MediaSort.NAME -> sortedWith(entryBaseComparator.thenBy { it.name.lowercase(Locale.US) })
-        MediaSort.DATE -> sortedWith(entryBaseComparator.thenBy { it.modifiedAt }.thenBy { it.name.lowercase(Locale.US) })
-        MediaSort.TYPE -> sortedWith(entryBaseComparator.thenBy { it.mediaTypeName }.thenBy { it.name.lowercase(Locale.US) })
-        MediaSort.SOURCE -> sortedWith(entryBaseComparator.thenBy { it.path.lowercase(Locale.US) })
+    return when (sort) {
+        MediaSort.NAME -> sortedWith(entryBaseComparator.then(orderBy<SmbEntry, String>(ascending) { it.name.lowercase(Locale.US) }))
+        MediaSort.DATE -> sortedWith(entryBaseComparator.then(orderBy<SmbEntry, Long>(ascending) { it.modifiedAt }).thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.TYPE -> sortedWith(entryBaseComparator.then(orderBy<SmbEntry, String>(ascending) { it.mediaTypeName }).thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.SOURCE -> sortedWith(entryBaseComparator.then(orderBy<SmbEntry, String>(ascending) { it.path.lowercase(Locale.US) }))
     }
-    return if (ascending) sorted else sorted.asReversed()
 }
 
 fun List<RemoteEntry>.sortedRemoteEntriesFor(sort: MediaSort, ascending: Boolean = true): List<RemoteEntry> {
-    val sorted = when (sort) {
-        MediaSort.NAME -> sortedWith(remoteEntryBaseComparator.thenBy { it.name.lowercase(Locale.US) })
-        MediaSort.DATE -> sortedWith(remoteEntryBaseComparator.thenBy { it.modifiedAt ?: 0L }.thenBy { it.name.lowercase(Locale.US) })
-        MediaSort.TYPE -> sortedWith(remoteEntryBaseComparator.thenBy { it.mediaTypeName }.thenBy { it.name.lowercase(Locale.US) })
-        MediaSort.SOURCE -> sortedWith(remoteEntryBaseComparator.thenBy { it.path.lowercase(Locale.US) })
+    return when (sort) {
+        MediaSort.NAME -> sortedWith(remoteEntryBaseComparator.then(orderBy<RemoteEntry, String>(ascending) { it.name.lowercase(Locale.US) }))
+        MediaSort.DATE -> sortedWith(remoteEntryBaseComparator.then(orderBy<RemoteEntry, Long>(ascending) { it.modifiedAt ?: 0L }).thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.TYPE -> sortedWith(remoteEntryBaseComparator.then(orderBy<RemoteEntry, String>(ascending) { it.mediaTypeName }).thenBy { it.name.lowercase(Locale.US) })
+        MediaSort.SOURCE -> sortedWith(remoteEntryBaseComparator.then(orderBy<RemoteEntry, String>(ascending) { it.path.lowercase(Locale.US) }))
     }
-    return if (ascending) sorted else sorted.asReversed()
 }
+
+private fun LibraryItem.dateSortKey(): Long =
+    modifiedAt.takeIf { it > 0L } ?: ((year ?: 0) * 10_000L)
+
+private fun <T, R : Comparable<R>> orderBy(ascending: Boolean, selector: (T) -> R): Comparator<T> =
+    if (ascending) compareBy(selector) else compareByDescending(selector)
 
 private val entryBaseComparator = compareByDescending<SmbEntry> { it.isDirectory }
     .thenByDescending { it.isMedia }

@@ -65,7 +65,7 @@ outfuse 是一个面向 Android 手机与平板的个人媒体库播放器，目
 Release APK 会输出到：
 
 ```text
-app/build/outputs/apk/release/outfuse-0.1.0-release.apk
+app/build/outputs/apk/release/outfuse-0.1.1-release.apk
 ```
 
 ## 开源说明
