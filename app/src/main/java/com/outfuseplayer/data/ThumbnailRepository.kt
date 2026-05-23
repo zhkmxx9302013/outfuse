@@ -42,6 +42,7 @@ import java.nio.ByteBuffer
 
 object ThumbnailRepository {
     private const val MAX_EDGE = 360
+    private const val REMOTE_THUMBNAIL_IMAGE_BYTES = 32 * 1024 * 1024
     private val limiter = Semaphore(2)
     private val cache = object : LruCache<String, Bitmap>(24 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
@@ -60,6 +61,15 @@ object ThumbnailRepository {
         withContext(Dispatchers.IO) {
             loadContentImage(context, uri, maxEdge)
         }
+
+    suspend fun imageBitmap(
+        context: Context?,
+        item: LibraryItem,
+        maxBytes: Int = 96 * 1024 * 1024,
+        maxEdge: Int = 4096
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        imageBytes(context, item, maxBytes)?.decodeSampledBitmap(maxEdge)
+    }
 
     suspend fun imageBytes(context: Context?, item: LibraryItem, maxBytes: Int = 32 * 1024 * 1024): ByteArray? =
         withContext(Dispatchers.IO) {
@@ -113,6 +123,72 @@ object ThumbnailRepository {
                 else -> null
             }
         }
+
+    suspend fun videoFrame(
+        context: Context?,
+        item: LibraryItem,
+        positionMs: Long,
+        maxEdge: Int = MAX_EDGE
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        if (item.itemType == LibraryItemType.IMAGE || item.itemType == LibraryItemType.FOLDER) {
+            return@withContext null
+        }
+        val frameKey = if (maxEdge <= MAX_EDGE) {
+            "frame:${item.id}:${item.modifiedAt}:${positionMs.coerceAtLeast(0L) / 1000L}:$maxEdge"
+        } else {
+            null
+        }
+        frameKey?.let { key ->
+            synchronized(cache) {
+                cache.get(key)?.let { return@withContext it }
+            }
+        }
+        val uri = item.streamUrl?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return@withContext null
+        limiter.withPermit {
+            val bitmap = runCatching {
+                when {
+                    uri.scheme.equals("smb", ignoreCase = true) -> {
+                        val config = SmbCredentialRegistry.find(uri) ?: return@runCatching null
+                        val path = uri.pathSegments.drop(1).joinToString("\\").toRemotePath()
+                        SmbFrameDataSource(config, path).use { dataSource ->
+                            MediaMetadataRetriever().use { retriever ->
+                                retriever.setDataSource(dataSource)
+                                retriever.extractFrameAt(positionMs, maxEdge)
+                            }
+                        }
+                    }
+                    uri.scheme.equals(WebDavUriScheme, ignoreCase = true) -> {
+                        val config = RemoteSourceRegistry.find(uri) ?: return@runCatching null
+                        val path = uri.pathSegments.joinToString("/")
+                        MediaMetadataRetriever().use { retriever ->
+                            retriever.setDataSource(
+                                WebDavRepository().streamUrl(config, path),
+                                WebDavRepository().streamHeaders(config)
+                            )
+                            retriever.extractFrameAt(positionMs, maxEdge)
+                        }
+                    }
+                    uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true) -> {
+                        MediaMetadataRetriever().use { retriever ->
+                            retriever.setDataSource(uri.toString(), emptyMap())
+                            retriever.extractFrameAt(positionMs, maxEdge)
+                        }
+                    }
+                    context != null -> {
+                        MediaMetadataRetriever().use { retriever ->
+                            retriever.setDataSource(context, uri)
+                            retriever.extractFrameAt(positionMs, maxEdge)
+                        }
+                    }
+                    else -> null
+                }
+            }.getOrNull()
+            if (bitmap != null && frameKey != null) {
+                synchronized(cache) { cache.put(frameKey, bitmap) }
+            }
+            bitmap
+        }
+    }
 
     suspend fun thumbnail(context: Context?, item: LibraryItem): Bitmap? = withContext(Dispatchers.IO) {
         val key = "${item.id}:${item.modifiedAt}"
@@ -174,7 +250,7 @@ object ThumbnailRepository {
         val config = SmbCredentialRegistry.find(uri) ?: return null
         val path = uri.pathSegments.drop(1).joinToString("\\").toRemotePath()
         return if (item.itemType == LibraryItemType.IMAGE) {
-            val bytes = SmbRepository().readBytesBlocking(config, path, 96 * 1024 * 1024)
+            val bytes = SmbRepository().readBytesBlocking(config, path, REMOTE_THUMBNAIL_IMAGE_BYTES)
             bytes?.decodeSampledBitmap(MAX_EDGE)
         } else {
             runCatching {
@@ -193,7 +269,7 @@ object ThumbnailRepository {
         val path = uri.pathSegments.joinToString("/")
         return if (item.itemType == LibraryItemType.IMAGE) {
             val bytes = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-                WebDavRepository().readBytes(config, path, 96 * 1024 * 1024).value
+                WebDavRepository().readBytes(config, path, REMOTE_THUMBNAIL_IMAGE_BYTES).value
             }
             bytes?.decodeSampledBitmap(MAX_EDGE)
         } else {
@@ -285,6 +361,27 @@ object ThumbnailRepository {
             getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { return it }
             getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)?.let { return it }
         }
+        return null
+    }
+
+    private fun MediaMetadataRetriever.extractFrameAt(positionMs: Long, maxEdge: Int): Bitmap? {
+        val timeUs = positionMs.coerceAtLeast(0L) * 1000L
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            runCatching {
+                getScaledFrameAtTime(
+                    timeUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST,
+                    maxEdge.coerceAtLeast(1),
+                    (maxEdge * 9 / 16).coerceAtLeast(1)
+                )
+            }.getOrNull()?.let { return it }
+        }
+        getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+            ?.scaleToMaxEdge(maxEdge)
+            ?.let { return it }
+        getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?.scaleToMaxEdge(maxEdge)
+            ?.let { return it }
         return null
     }
 

@@ -30,11 +30,12 @@ import kotlin.math.min
 import tv.danmaku.ijk.media.player.misc.IMediaDataSource
 
 private val VlcLegacyExtensions = setOf(
-    "wmv", "asf", "avi", "divx", "rm", "rmvb", "mpg", "mpeg", "mpe", "m1v",
+    "wmv", "asf", "avi", "divx", "rm", "rmvb", "mkv", "mpg", "mpeg", "mpe", "m1v",
     "m2v", "m2p", "mpv", "mpv2", "vob", "dat"
 )
 
 private val VlcRiskyContainerExtensions = setOf("mp4", "m4v", "mov", "qt")
+private val VlcNetworkContainerExtensions = VlcRiskyContainerExtensions + "mkv"
 
 private val VlcRiskyCodecHints = setOf(
     "dolby vision", "dolby.vision", "dovi", "dvhe", "dvh1",
@@ -58,11 +59,20 @@ private fun LibraryItem.playbackExtension(): String =
 fun LibraryItem.requiresVlcPlayer(): Boolean {
     val extension = playbackExtension()
     if (extension in VlcLegacyExtensions) return true
+    if (extension in VlcNetworkContainerExtensions && isNetworkPlayback()) return true
     if (extension !in VlcRiskyContainerExtensions) return false
     val hints = listOf(path, originalTitle.orEmpty(), title, videoCodec, hdr.orEmpty())
         .joinToString(" ")
         .lowercase()
     return VlcRiskyCodecHints.any { it in hints }
+}
+
+private fun LibraryItem.isNetworkPlayback(): Boolean {
+    val scheme = streamUrl?.let { runCatching { Uri.parse(it).scheme.orEmpty() }.getOrDefault("") }.orEmpty()
+    return scheme.equals("smb", ignoreCase = true) ||
+        scheme.equals(WebDavUriScheme, ignoreCase = true) ||
+        scheme.equals("http", ignoreCase = true) ||
+        scheme.equals("https", ignoreCase = true)
 }
 
 fun LibraryItem.requiresIjkPlayer(): Boolean {

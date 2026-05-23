@@ -37,6 +37,8 @@ data class AppSettings(
     val cacheArtworkOnWifi: Boolean = true,
     val rememberPlayback: Boolean = true,
     val showDiagnostics: Boolean = true,
+    val screenshotSaveTreeUri: String = "",
+    val fileDownloadTreeUri: String = "",
     val firstRunGuideSeen: Boolean = false
 )
 
@@ -78,6 +80,8 @@ class SettingsStore(context: Context) {
         cacheArtworkOnWifi = prefs.getBoolean(KEY_CACHE_ARTWORK_WIFI, true),
         rememberPlayback = prefs.getBoolean(KEY_REMEMBER_PLAYBACK, true),
         showDiagnostics = prefs.getBoolean(KEY_SHOW_DIAGNOSTICS, true),
+        screenshotSaveTreeUri = prefs.getString(KEY_SCREENSHOT_SAVE_TREE_URI, "") ?: "",
+        fileDownloadTreeUri = prefs.getString(KEY_FILE_DOWNLOAD_TREE_URI, "") ?: "",
         firstRunGuideSeen = prefs.getBoolean(KEY_FIRST_RUN_GUIDE_SEEN, false)
     )
 
@@ -117,6 +121,8 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_CACHE_ARTWORK_WIFI, settings.cacheArtworkOnWifi)
             .putBoolean(KEY_REMEMBER_PLAYBACK, settings.rememberPlayback)
             .putBoolean(KEY_SHOW_DIAGNOSTICS, settings.showDiagnostics)
+            .putString(KEY_SCREENSHOT_SAVE_TREE_URI, settings.screenshotSaveTreeUri)
+            .putString(KEY_FILE_DOWNLOAD_TREE_URI, settings.fileDownloadTreeUri)
             .putBoolean(KEY_FIRST_RUN_GUIDE_SEEN, settings.firstRunGuideSeen)
             .apply()
     }
@@ -174,6 +180,8 @@ class SettingsStore(context: Context) {
         private const val KEY_CACHE_ARTWORK_WIFI = "cache_artwork_wifi"
         private const val KEY_REMEMBER_PLAYBACK = "remember_playback"
         private const val KEY_SHOW_DIAGNOSTICS = "show_diagnostics"
+        private const val KEY_SCREENSHOT_SAVE_TREE_URI = "screenshot_save_tree_uri"
+        private const val KEY_FILE_DOWNLOAD_TREE_URI = "file_download_tree_uri"
         private const val KEY_FIRST_RUN_GUIDE_SEEN = "first_run_guide_seen"
         private const val KEY_HISTORY_CLEARED_AT = "history_cleared_at"
         private const val KEY_CACHES_CLEARED_AT = "caches_cleared_at"

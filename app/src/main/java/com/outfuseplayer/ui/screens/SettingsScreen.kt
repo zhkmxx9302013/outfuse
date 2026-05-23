@@ -1,5 +1,8 @@
 ﻿package com.outfuseplayer.ui.screens
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -61,6 +64,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import com.outfuseplayer.data.AppSettings
+import com.outfuseplayer.data.MediaOutputRepository
 import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.data.ThumbnailRepository
 import com.outfuseplayer.ui.i18n.LanguageChoice
@@ -101,6 +105,27 @@ fun SettingsScreen(
         if (settings == null) store.save(next)
         onSettingsChange(next)
         notice = strings.text(message)
+    }
+
+    val screenshotFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+        update(currentSettings.copy(screenshotSaveTreeUri = uri.toString()), "默认截图保存位置已更新")
+    }
+    val downloadFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+        update(currentSettings.copy(fileDownloadTreeUri = uri.toString()), "默认文件下载位置已更新")
     }
 
     if (showHelp) {
@@ -268,6 +293,39 @@ fun SettingsScreen(
                         update(
                             currentSettings.copy(quickSyncDeletedFiles = it),
                             if (it) "刷新媒体库时会先校验已有文件是否仍存在" else "已关闭删除文件快速同步"
+                        )
+                    }
+                )
+            }
+        }
+        item {
+            SettingsSection(
+                title = "保存位置",
+                icon = Icons.Outlined.Folder,
+                tint = PrimaryAmber,
+                expanded = expanded
+            ) {
+                FolderLocationSetting(
+                    title = "默认截图保存位置",
+                    subtitle = "播放器截图会保存到这里",
+                    location = MediaOutputRepository.describeScreenshotLocation(context, currentSettings),
+                    onChoose = { screenshotFolderLauncher.launch(null) },
+                    onReset = {
+                        update(
+                            currentSettings.copy(screenshotSaveTreeUri = ""),
+                            "截图保存位置已恢复为应用默认目录"
+                        )
+                    }
+                )
+                FolderLocationSetting(
+                    title = "默认文件下载位置",
+                    subtitle = "来源浏览和文件管理下载会保存到这里",
+                    location = MediaOutputRepository.describeDownloadLocation(context, currentSettings),
+                    onChoose = { downloadFolderLauncher.launch(null) },
+                    onReset = {
+                        update(
+                            currentSettings.copy(fileDownloadTreeUri = ""),
+                            "文件下载位置已恢复为应用默认目录"
                         )
                     }
                 )
@@ -812,6 +870,47 @@ private fun OptionSetting(
                         selectedLabelColor = PrimaryOrange
                     )
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderLocationSetting(
+    title: String,
+    subtitle: String,
+    location: String,
+    onChoose: () -> Unit,
+    onReset: () -> Unit
+) {
+    val strings = LocalUiStrings.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(strings.text(title), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(strings.text(subtitle), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = location,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = onChoose,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(7.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+            ) {
+                Text(strings.text("选择文件夹"))
+            }
+            OutlinedButton(
+                onClick = onReset,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(7.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+            ) {
+                Text(strings.text("应用默认目录"))
             }
         }
     }

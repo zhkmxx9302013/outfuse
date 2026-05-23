@@ -2,6 +2,7 @@
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.media.AudioManager
 import android.net.Uri
@@ -9,11 +10,13 @@ import android.os.SystemClock
 import android.view.TextureView
 import android.view.ViewGroup
 import android.view.Surface as AndroidSurface
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -22,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -31,6 +35,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -45,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AspectRatio
+import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Forward10
@@ -80,13 +86,16 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,6 +106,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MediaItem as ExoMediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -105,6 +115,9 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.outfuseplayer.data.PlaybackPositionStore
 import com.outfuseplayer.data.PlaybackSettingsStore
+import com.outfuseplayer.data.MediaOutputRepository
+import com.outfuseplayer.data.SettingsStore
+import com.outfuseplayer.data.ThumbnailRepository
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.playback.createIjkDataSource
@@ -120,6 +133,7 @@ import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
 import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -136,6 +150,14 @@ private enum class PlayerFitMode(val label: String, val resizeMode: Int) {
     FILL_HEIGHT("纵向充满", AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT),
     CROP("裁剪充满", AspectRatioFrameLayout.RESIZE_MODE_ZOOM),
     STRETCH("拉伸", AspectRatioFrameLayout.RESIZE_MODE_FILL)
+}
+
+private enum class PlayerAspectMode(val label: String, val ratio: Float?, val vlcAspectRatio: String?) {
+    ORIGINAL("原始比例", null, null),
+    RATIO_16_9("16:9", 16f / 9f, "16:9"),
+    RATIO_4_3("4:3", 4f / 3f, "4:3"),
+    RATIO_21_9("21:9", 21f / 9f, "21:9"),
+    RATIO_1_1("1:1", 1f, "1:1")
 }
 
 private enum class DecodeMode(val label: String) {
@@ -353,8 +375,9 @@ fun PlayerScreen(
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             .forceDisableMediaCodecAsynchronousQueueing()
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(30_000, 120_000, 2_500, 6_000)
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBufferDurationsMs(15_000, 60_000, 1_000, 2_500)
+            .setTargetBufferBytes(64 * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
         ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
@@ -405,6 +428,8 @@ fun PlayerScreen(
     var isPlaying by remember { mutableStateOf(true) }
     var shuffleEnabled by remember(startShuffle) { mutableStateOf(startShuffle) }
     var fitMode by remember { mutableStateOf(PlayerFitMode.FIT) }
+    var aspectMode by remember { mutableStateOf(PlayerAspectMode.ORIGINAL) }
+    var sourceAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
     var decodeMode by remember { mutableStateOf(DecodeMode.AUTO) }
     var soundBoost by remember { mutableStateOf(SoundBoostMode.OFF) }
     var ambienceMode by remember { mutableStateOf(AmbienceMode.BALANCED) }
@@ -428,6 +453,7 @@ fun PlayerScreen(
     var durationMs by remember { mutableLongStateOf(1L) }
     var leavingPlayer by remember { mutableStateOf(false) }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
+    val saveScreenshot = rememberScreenshotSaver(currentItem, positionMs)
     val subtitleLabel = if (externalSubtitleItemId == currentItem.id && externalSubtitleUri != null) {
         Uri.parse(externalSubtitleUri).lastPathSegment?.substringAfterLast('/') ?: "外挂字幕"
     } else {
@@ -486,6 +512,10 @@ fun PlayerScreen(
                     val resumeMs = positionStore.get(nextItem.id, nextItem.path)
                     if (resumeMs > 0L) player.seekTo(resumeMs)
                 }
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                videoSize.toAspectRatio()?.let { sourceAspectRatio = it }
             }
         }
         player.addListener(listener)
@@ -607,7 +637,12 @@ fun PlayerScreen(
                 onVerticalDragEnd = { verticalMode = null }
             )
     ) {
-        PlayerSurface(player = player, fitMode = fitMode)
+        PlayerVideoViewport(
+            fitMode = fitMode,
+            aspectRatio = aspectMode.ratio ?: sourceAspectRatio
+        ) { surfaceModifier ->
+            PlayerSurface(player = player, modifier = surfaceModifier)
+        }
         VideoColorOverlay(
             ambienceMode = ambienceMode,
             aiEnhancement = aiEnhancement,
@@ -660,6 +695,7 @@ fun PlayerScreen(
                     }
                 )
                 PlayerBottomControls(
+                    item = currentItem,
                     player = player,
                     isPlaying = isPlaying,
                     shuffleEnabled = shuffleEnabled,
@@ -725,6 +761,10 @@ fun PlayerScreen(
                         moreVisible = false
                         onShowFileLocation(currentItem)
                     },
+                    onSaveScreenshot = {
+                        moreVisible = false
+                        saveScreenshot()
+                    },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .safeDrawingPadding()
@@ -753,6 +793,8 @@ fun PlayerScreen(
                     expanded = expanded,
                     fitMode = fitMode,
                     onFitModeChange = { fitMode = it },
+                    aspectMode = aspectMode,
+                    onAspectModeChange = { aspectMode = it },
                     decodeMode = decodeMode,
                     onDecodeModeChange = { decodeMode = it },
                     soundBoost = soundBoost,
@@ -852,6 +894,7 @@ fun PlayerScreen(
 private fun PlayerMorePanel(
     item: LibraryItem,
     onOpenSettings: () -> Unit,
+    onSaveScreenshot: () -> Unit,
     onShowFileLocation: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -869,11 +912,35 @@ private fun PlayerMorePanel(
                 onClick = onShowFileLocation
             )
             MorePanelRow(
+                icon = Icons.Outlined.CameraAlt,
+                title = "保存当前截图",
+                subtitle = "按当前播放时间保存到默认截图目录",
+                onClick = onSaveScreenshot
+            )
+            MorePanelRow(
                 icon = Icons.Outlined.Settings,
                 title = "播放设置",
                 subtitle = "屏幕模式、解码、音效与手势",
                 onClick = onOpenSettings
             )
+        }
+    }
+}
+
+@Composable
+private fun rememberScreenshotSaver(item: LibraryItem, positionMs: Long): () -> Unit {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    return {
+        scope.launch {
+            Toast.makeText(context, "正在生成截图", Toast.LENGTH_SHORT).show()
+            val result = MediaOutputRepository.saveScreenshot(
+                context = context,
+                item = item,
+                positionMs = positionMs,
+                settings = SettingsStore(context).load()
+            )
+            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
         }
     }
 }
@@ -1034,6 +1101,8 @@ private fun VlcFallbackPlayerScreen(
     var moreVisible by remember { mutableStateOf(false) }
     var playlistVisible by remember { mutableStateOf(false) }
     var fitMode by remember { mutableStateOf(PlayerFitMode.FIT) }
+    var aspectMode by remember { mutableStateOf(PlayerAspectMode.ORIGINAL) }
+    var sourceAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
     var decodeMode by remember { mutableStateOf(DecodeMode.HARDWARE) }
     var soundBoost by remember { mutableStateOf(SoundBoostMode.OFF) }
     var ambienceMode by remember { mutableStateOf(AmbienceMode.BALANCED) }
@@ -1060,6 +1129,7 @@ private fun VlcFallbackPlayerScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var externalSubtitleUri by remember { mutableStateOf<String?>(null) }
     var leavingPlayer by remember { mutableStateOf(false) }
+    val saveScreenshot = rememberScreenshotSaver(currentItem, positionMs)
     val subtitleLabel = externalSubtitleUri
         ?.let { Uri.parse(it).lastPathSegment?.substringAfterLast('/') ?: "外挂字幕" }
         ?: "未添加"
@@ -1086,6 +1156,7 @@ private fun VlcFallbackPlayerScreen(
         savePosition()
         currentIndex = index
         controlsVisible = true
+        settingsVisible = false
         moreVisible = false
         playlistVisible = false
     }
@@ -1107,16 +1178,20 @@ private fun VlcFallbackPlayerScreen(
         }
     }
 
-    fun applyVlcFit(mode: PlayerFitMode) {
+    fun applyVlcFit(mode: PlayerFitMode, aspect: PlayerAspectMode) {
         runCatching {
-            player.setAspectRatio(null)
-            player.setScale(
+            player.setAspectRatio(aspect.vlcAspectRatio)
+            player.setScale(0f)
+            player.setVideoScale(
                 when (mode) {
-                    PlayerFitMode.FIT -> 0f
-                    PlayerFitMode.FILL_WIDTH, PlayerFitMode.FILL_HEIGHT, PlayerFitMode.CROP -> 1.08f
-                    PlayerFitMode.STRETCH -> 0f
+                    PlayerFitMode.FIT -> VlcMediaPlayer.ScaleType.SURFACE_BEST_FIT
+                    PlayerFitMode.FILL_WIDTH,
+                    PlayerFitMode.FILL_HEIGHT,
+                    PlayerFitMode.CROP -> VlcMediaPlayer.ScaleType.SURFACE_BEST_FIT
+                    PlayerFitMode.STRETCH -> VlcMediaPlayer.ScaleType.SURFACE_FILL
                 }
             )
+            player.updateVideoSurfaces()
         }
     }
 
@@ -1205,7 +1280,7 @@ private fun VlcFallbackPlayerScreen(
             media.release()
             player.play()
             applyVlcVolume(soundBoost)
-            applyVlcFit(fitMode)
+            applyVlcFit(fitMode, aspectMode)
         }.onFailure { error ->
             controlsVisible = true
             errorMessage = "兼容播放器初始化失败：${error.message ?: error.javaClass.simpleName}"
@@ -1216,8 +1291,8 @@ private fun VlcFallbackPlayerScreen(
         applyVlcVolume(soundBoost)
     }
 
-    LaunchedEffect(fitMode) {
-        applyVlcFit(fitMode)
+    LaunchedEffect(fitMode, aspectMode) {
+        applyVlcFit(fitMode, aspectMode)
     }
 
     LaunchedEffect(isPrepared, currentItem.id) {
@@ -1225,6 +1300,7 @@ private fun VlcFallbackPlayerScreen(
             positionMs = runCatching { player.time }.getOrDefault(positionMs).coerceAtLeast(0L)
             val length = runCatching { player.length }.getOrDefault(durationMs)
             if (length > 0) durationMs = length
+            runCatching { player.currentVideoTrack }.getOrNull()?.toAspectRatio()?.let { sourceAspectRatio = it }
             if (isPrepared && durationMs > 0) {
                 positionStore.save(currentItem.id, currentItem.path, positionMs, durationMs)
             }
@@ -1261,7 +1337,12 @@ private fun VlcFallbackPlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        VlcVideoSurface(player = player)
+        PlayerVideoViewport(
+            fitMode = fitMode,
+            aspectRatio = aspectMode.ratio ?: sourceAspectRatio
+        ) { surfaceModifier ->
+            VlcVideoSurface(player = player, modifier = surfaceModifier)
+        }
         VideoColorOverlay(
             ambienceMode = ambienceMode,
             aiEnhancement = aiEnhancement,
@@ -1391,6 +1472,7 @@ private fun VlcFallbackPlayerScreen(
                     }
                 )
                 IjkBottomControls(
+                    item = currentItem,
                     title = currentItem.title,
                     isPlaying = isPlaying,
                     positionMs = positionMs,
@@ -1398,7 +1480,8 @@ private fun VlcFallbackPlayerScreen(
                     hasPrevious = currentIndex > 0,
                     hasNext = currentIndex < playbackItems.lastIndex,
                     onTogglePlay = ::togglePlayback,
-                    onSeek = { target ->
+                    onSeekPreview = { controlsVisible = true },
+                    onSeekCommit = { target ->
                         val next = target.coerceIn(0L, durationMs.coerceAtLeast(1L))
                         player.time = next
                         positionMs = next
@@ -1428,6 +1511,10 @@ private fun VlcFallbackPlayerScreen(
                         moreVisible = false
                         onShowFileLocation(currentItem)
                     },
+                    onSaveScreenshot = {
+                        moreVisible = false
+                        saveScreenshot()
+                    },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .safeDrawingPadding()
@@ -1451,6 +1538,8 @@ private fun VlcFallbackPlayerScreen(
                     expanded = expanded,
                     fitMode = fitMode,
                     onFitModeChange = { fitMode = it },
+                    aspectMode = aspectMode,
+                    onAspectModeChange = { aspectMode = it },
                     decodeMode = decodeMode,
                     onDecodeModeChange = { decodeMode = it },
                     soundBoost = soundBoost,
@@ -1536,9 +1625,9 @@ private fun VlcFallbackPlayerScreen(
 }
 
 @Composable
-private fun VlcVideoSurface(player: VlcMediaPlayer) {
+private fun VlcVideoSurface(player: VlcMediaPlayer, modifier: Modifier = Modifier) {
     AndroidView(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier,
         factory = { context ->
             VLCVideoLayout(context).apply {
                 runCatching { player.attachViews(this, null, false, false) }
@@ -1600,8 +1689,20 @@ private fun IjkFallbackPlayerScreen(
     }
     var activeDataSource by remember { mutableStateOf<IMediaDataSource?>(null) }
     var controlsVisible by remember { mutableStateOf(true) }
+    var settingsVisible by remember { mutableStateOf(false) }
     var moreVisible by remember { mutableStateOf(false) }
     var playlistVisible by remember { mutableStateOf(false) }
+    var fitMode by remember { mutableStateOf(PlayerFitMode.FIT) }
+    var aspectMode by remember { mutableStateOf(PlayerAspectMode.ORIGINAL) }
+    var sourceAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
+    var decodeMode by remember { mutableStateOf(DecodeMode.SOFTWARE) }
+    var soundBoost by remember { mutableStateOf(SoundBoostMode.OFF) }
+    var ambienceMode by remember { mutableStateOf(AmbienceMode.BALANCED) }
+    var aiEnhancement by remember { mutableStateOf(false) }
+    var playbackSpeed by remember { mutableFloatStateOf(1f) }
+    var autoPlayNext by remember { mutableStateOf(true) }
+    var sleepTimerMode by remember { mutableStateOf(SleepTimerMode.OFF) }
+    var locked by remember { mutableStateOf(false) }
     var seekStepSeconds by remember { mutableStateOf(settingsStore.seekStepSeconds()) }
     var fastForwarding by remember { mutableStateOf(false) }
     var dragPreviewMs by remember { mutableLongStateOf(-1L) }
@@ -1619,7 +1720,8 @@ private fun IjkFallbackPlayerScreen(
     var durationMs by remember { mutableLongStateOf(1L) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var leavingPlayer by remember { mutableStateOf(false) }
-    val playerGesturesEnabled = !moreVisible && !playlistVisible
+    val saveScreenshot = rememberScreenshotSaver(currentItem, positionMs)
+    val playerGesturesEnabled = !locked && !settingsVisible && !moreVisible && !playlistVisible
 
     fun savePosition() {
         if (isPrepared && durationMs > 0) {
@@ -1658,7 +1760,7 @@ private fun IjkFallbackPlayerScreen(
         controlsVisible = true
     }
 
-    DisposableEffect(player) {
+    DisposableEffect(player, autoPlayNext) {
         player.setOnPreparedListener { mediaPlayer ->
             isPrepared = true
             durationMs = mediaPlayer.duration.takeIf { it > 0 } ?: durationMs
@@ -1671,7 +1773,7 @@ private fun IjkFallbackPlayerScreen(
         }
         player.setOnCompletionListener {
             savePosition()
-            if (currentIndex < playbackItems.lastIndex) {
+            if (autoPlayNext && currentIndex < playbackItems.lastIndex) {
                 currentIndex += 1
             } else {
                 isPlaying = false
@@ -1730,6 +1832,7 @@ private fun IjkFallbackPlayerScreen(
                 positionMs = runCatching { player.currentPosition }.getOrDefault(positionMs).coerceAtLeast(0L)
                 val duration = runCatching { player.duration }.getOrDefault(durationMs)
                 if (duration > 0) durationMs = duration
+                player.ijkNativeAspectRatio()?.let { sourceAspectRatio = it }
                 if (durationMs > 0) {
                     positionStore.save(currentItem.id, currentItem.path, positionMs, durationMs)
                 }
@@ -1738,8 +1841,8 @@ private fun IjkFallbackPlayerScreen(
         }
     }
 
-    LaunchedEffect(controlsVisible, moreVisible, playlistVisible) {
-        if (controlsVisible && !moreVisible && !playlistVisible) {
+    LaunchedEffect(controlsVisible, settingsVisible, moreVisible, playlistVisible, locked) {
+        if (!locked && controlsVisible && !settingsVisible && !moreVisible && !playlistVisible) {
             delay(3000)
             controlsVisible = false
         }
@@ -1752,12 +1855,32 @@ private fun IjkFallbackPlayerScreen(
         }
     }
 
+    LaunchedEffect(sleepTimerMode, currentItem.id, durationMs) {
+        val waitMs = when (sleepTimerMode) {
+            SleepTimerMode.OFF -> null
+            SleepTimerMode.END_OF_ITEM -> (durationMs - positionMs).takeIf { it > 1_000L }
+            else -> sleepTimerMode.millis
+        } ?: return@LaunchedEffect
+        delay(waitMs)
+        leavePlayer()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        IjkVideoSurface(player = player)
+        PlayerVideoViewport(
+            fitMode = fitMode,
+            aspectRatio = aspectMode.ratio ?: sourceAspectRatio
+        ) { surfaceModifier ->
+            IjkVideoSurface(player = player, modifier = surfaceModifier)
+        }
+        VideoColorOverlay(
+            ambienceMode = ambienceMode,
+            aiEnhancement = aiEnhancement,
+            modifier = Modifier.matchParentSize()
+        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1775,7 +1898,7 @@ private fun IjkFallbackPlayerScreen(
                         }
                     },
                     onLongPressEnd = {
-                        runCatching { player.setSpeed(1f) }
+                        runCatching { player.setSpeed(playbackSpeed) }
                         fastForwarding = false
                     },
                     onHorizontalDragStart = {
@@ -1842,8 +1965,17 @@ private fun IjkFallbackPlayerScreen(
         errorMessage?.let { message ->
             GestureText(text = message, modifier = Modifier.align(Alignment.Center))
         }
+        if (locked) {
+            LockedOverlay(
+                onUnlock = {
+                    locked = false
+                    controlsVisible = true
+                },
+                modifier = Modifier.align(Alignment.TopEnd)
+            )
+        }
         AnimatedVisibility(
-            visible = controlsVisible || moreVisible || playlistVisible,
+            visible = !locked && (controlsVisible || settingsVisible || moreVisible || playlistVisible),
             modifier = Modifier.fillMaxSize()
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -1852,20 +1984,30 @@ private fun IjkFallbackPlayerScreen(
                     item = currentItem,
                     onBack = ::leavePlayer,
                     onSettings = {
-                        moreVisible = true
+                        settingsVisible = !settingsVisible
+                        moreVisible = false
                         playlistVisible = false
                     },
                     onPlaylist = {
                         playlistVisible = !playlistVisible
+                        settingsVisible = false
                         moreVisible = false
                     },
-                    onLock = { controlsVisible = false },
+                    onLock = {
+                        locked = true
+                        controlsVisible = false
+                        settingsVisible = false
+                        moreVisible = false
+                        playlistVisible = false
+                    },
                     onMore = {
                         moreVisible = !moreVisible
+                        settingsVisible = false
                         playlistVisible = false
                     }
                 )
                 IjkBottomControls(
+                    item = currentItem,
                     title = currentItem.title,
                     isPlaying = isPlaying,
                     positionMs = positionMs,
@@ -1873,7 +2015,8 @@ private fun IjkFallbackPlayerScreen(
                     hasPrevious = currentIndex > 0,
                     hasNext = currentIndex < playbackItems.lastIndex,
                     onTogglePlay = ::togglePlayback,
-                    onSeek = { target ->
+                    onSeekPreview = { controlsVisible = true },
+                    onSeekCommit = { target ->
                         if (isPrepared) {
                             val next = target.coerceIn(0L, durationMs.coerceAtLeast(1L))
                             player.seekTo(next)
@@ -1887,7 +2030,7 @@ private fun IjkFallbackPlayerScreen(
                 )
             }
         }
-        AnimatedVisibility(visible = moreVisible, modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(visible = !locked && moreVisible, modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
@@ -1898,11 +2041,16 @@ private fun IjkFallbackPlayerScreen(
                     item = currentItem,
                     onOpenSettings = {
                         moreVisible = false
+                        settingsVisible = true
                         controlsVisible = true
                     },
                     onShowFileLocation = {
                         moreVisible = false
                         onShowFileLocation(currentItem)
+                    },
+                    onSaveScreenshot = {
+                        moreVisible = false
+                        saveScreenshot()
                     },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -1912,7 +2060,76 @@ private fun IjkFallbackPlayerScreen(
                 )
             }
         }
-        AnimatedVisibility(visible = playlistVisible, modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(visible = !locked && settingsVisible, modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable {
+                            settingsVisible = false
+                            playlistVisible = false
+                        }
+                )
+                PlaybackSettingsPanel(
+                    item = currentItem,
+                    expanded = expanded,
+                    fitMode = fitMode,
+                    onFitModeChange = { fitMode = it },
+                    aspectMode = aspectMode,
+                    onAspectModeChange = { aspectMode = it },
+                    decodeMode = decodeMode,
+                    onDecodeModeChange = { decodeMode = it },
+                    soundBoost = soundBoost,
+                    onSoundBoostChange = {
+                        soundBoost = it
+                        runCatching { player.setVolume(it.gain, it.gain) }
+                    },
+                    ambienceMode = ambienceMode,
+                    onAmbienceModeChange = { ambienceMode = it },
+                    aiEnhancement = aiEnhancement,
+                    onAiEnhancementChange = { aiEnhancement = it },
+                    playbackSpeed = playbackSpeed,
+                    onPlaybackSpeedChange = {
+                        playbackSpeed = it
+                        runCatching { player.setSpeed(it) }
+                    },
+                    sleepTimerMode = sleepTimerMode,
+                    onSleepTimerChange = { sleepTimerMode = it },
+                    subtitleLabel = "IJK 内核播放中",
+                    onAddSubtitleFile = {
+                        Toast.makeText(context, "IJK 内核暂不支持播放中添加字幕", Toast.LENGTH_SHORT).show()
+                    },
+                    autoPlayNext = autoPlayNext,
+                    onAutoPlayNextChange = { autoPlayNext = it },
+                    locked = locked,
+                    onLockedChange = {
+                        locked = it
+                        settingsVisible = false
+                        playlistVisible = false
+                    },
+                    seekStepSeconds = seekStepSeconds,
+                    onSeekStepChange = { seconds ->
+                        seekStepSeconds = seconds
+                        settingsStore.saveSeekStepSeconds(seconds)
+                    },
+                    modifier = if (expanded) {
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .safeDrawingPadding()
+                            .padding(top = 54.dp, end = 14.dp, bottom = 18.dp)
+                            .width(340.dp)
+                            .fillMaxHeight()
+                    } else {
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .safeDrawingPadding()
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                    }
+                )
+            }
+        }
+        AnimatedVisibility(visible = !locked && playlistVisible, modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
@@ -1947,9 +2164,9 @@ private fun IjkFallbackPlayerScreen(
 }
 
 @Composable
-private fun IjkVideoSurface(player: IjkMediaPlayer) {
+private fun IjkVideoSurface(player: IjkMediaPlayer, modifier: Modifier = Modifier) {
     AndroidView(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier,
         factory = { context ->
             TextureView(context).apply {
                 surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -1978,8 +2195,21 @@ private fun IjkVideoSurface(player: IjkMediaPlayer) {
     )
 }
 
+private fun IjkMediaPlayer.ijkNativeAspectRatio(): Float? {
+    val width = videoWidth
+    val height = videoHeight
+    val sarNumerator = videoSarNum.takeIf { it > 0 } ?: 1
+    val sarDenominator = videoSarDen.takeIf { it > 0 } ?: 1
+    return if (width > 0 && height > 0) {
+        width.toFloat() * sarNumerator / sarDenominator / height
+    } else {
+        null
+    }
+}
+
 @Composable
 private fun IjkBottomControls(
+    item: LibraryItem,
     title: String,
     isPlaying: Boolean,
     positionMs: Long,
@@ -1987,13 +2217,16 @@ private fun IjkBottomControls(
     hasPrevious: Boolean,
     hasNext: Boolean,
     onTogglePlay: () -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeekPreview: (Long) -> Unit,
+    onSeekCommit: (Long) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     expanded: Boolean,
     modifier: Modifier = Modifier
 ) {
     val compact = !expanded
+    var scrubPositionMs by remember(item.id) { mutableLongStateOf(-1L) }
+    val visiblePositionMs = scrubPositionMs.takeIf { it >= 0L } ?: positionMs
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -2011,15 +2244,29 @@ private fun IjkBottomControls(
                 modifier = Modifier.weight(1f)
             )
             Text(
-                text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+                text = "${formatTime(visiblePositionMs)} / ${formatTime(durationMs)}",
                 style = MaterialTheme.typography.labelMedium,
                 color = TextMuted,
                 maxLines = 1
             )
         }
+        if (scrubPositionMs >= 0L) {
+            TimelineScrubPreviewTrack(
+                item = item,
+                previewMs = scrubPositionMs,
+                durationMs = durationMs
+            )
+        }
         Slider(
-            value = positionMs.coerceAtLeast(0L).toFloat(),
-            onValueChange = { onSeek(it.toLong()) },
+            value = visiblePositionMs.coerceAtLeast(0L).toFloat(),
+            onValueChange = {
+                scrubPositionMs = it.toLong().coerceIn(0L, durationMs.coerceAtLeast(1L))
+                onSeekPreview(scrubPositionMs)
+            },
+            onValueChangeFinished = {
+                onSeekCommit(scrubPositionMs.takeIf { it >= 0L } ?: positionMs)
+                scrubPositionMs = -1L
+            },
             valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
             colors = SliderDefaults.colors(
                 thumbColor = PrimaryOrange,
@@ -2037,7 +2284,7 @@ private fun IjkBottomControls(
             }
             Spacer(modifier = Modifier.width(if (compact) 8.dp else 12.dp))
             PlayerIconButton(Icons.Outlined.Replay10, "后退 10 秒", compact = compact) {
-                onSeek(positionMs - 10_000)
+                onSeekCommit(visiblePositionMs - 10_000)
             }
             Spacer(modifier = Modifier.width(if (compact) 8.dp else 12.dp))
             PlayerIconButton(
@@ -2049,12 +2296,112 @@ private fun IjkBottomControls(
             )
             Spacer(modifier = Modifier.width(if (compact) 8.dp else 12.dp))
             PlayerIconButton(Icons.Outlined.Forward10, "前进 10 秒", compact = compact) {
-                onSeek(positionMs + 10_000)
+                onSeekCommit(visiblePositionMs + 10_000)
             }
             Spacer(modifier = Modifier.width(if (compact) 8.dp else 12.dp))
             PlayerIconButton(Icons.Outlined.SkipNext, "下一项", compact = compact) {
                 if (hasNext) onNext()
             }
+        }
+    }
+}
+
+@Composable
+private fun TimelineScrubPreviewTrack(
+    item: LibraryItem,
+    previewMs: Long,
+    durationMs: Long
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val cardWidth = 178.dp
+        val fraction = if (durationMs > 0L) {
+            previewMs.toFloat() / durationMs.toFloat()
+        } else {
+            0f
+        }.coerceIn(0f, 1f)
+        val maxLeft = if (maxWidth > cardWidth) maxWidth - cardWidth else 0.dp
+        val rawLeft = maxWidth * fraction - cardWidth * 0.5f
+        val left = when {
+            rawLeft < 0.dp -> 0.dp
+            rawLeft > maxLeft -> maxLeft
+            else -> rawLeft
+        }
+        TimelineScrubPreview(
+            item = item,
+            previewMs = previewMs,
+            modifier = Modifier.offset(x = left)
+        )
+    }
+}
+
+@Composable
+private fun TimelineScrubPreview(
+    item: LibraryItem,
+    previewMs: Long,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var bitmap by remember(item.id) { mutableStateOf<Bitmap?>(null) }
+    var frameUnavailable by remember(item.id) { mutableStateOf(false) }
+    val requestedFrameMs = previewMs.coerceAtLeast(0L) / 1000L * 1000L
+
+    LaunchedEffect(item.id, item.modifiedAt, requestedFrameMs) {
+        frameUnavailable = false
+        val next = ThumbnailRepository.videoFrame(
+            context = context,
+            item = item,
+            positionMs = requestedFrameMs,
+            maxEdge = 360
+        )
+        if (next != null) {
+            bitmap = next
+        } else {
+            frameUnavailable = true
+        }
+    }
+
+    DisposableEffect(item.id) {
+        onDispose {
+            bitmap = null
+        }
+    }
+
+    Surface(
+        modifier = modifier.width(178.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.Black.copy(alpha = 0.84f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
+    ) {
+        Column(
+            modifier = Modifier.padding(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color.White.copy(alpha = 0.08f)),
+                contentAlignment = Alignment.Center
+            ) {
+                bitmap?.let { frame ->
+                    Image(
+                        bitmap = frame.asImageBitmap(),
+                        contentDescription = "时间轴预览",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } ?: Text(
+                    text = if (frameUnavailable) "该时间点暂无预览" else "正在取时间点帧",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextMuted
+                )
+            }
+            Text(
+                text = formatTime(previewMs),
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White
+            )
         }
     }
 }
@@ -2065,6 +2412,7 @@ private fun IjkMediaPlayer.configureIjkPlayer() {
     setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1L)
     setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1L)
     setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1L)
+    setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "enable-accurate-seek", 1L)
     setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 4_194_304L)
     setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 4_000_000L)
     setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "max-buffer-size", 8_388_608L)
@@ -2072,13 +2420,13 @@ private fun IjkMediaPlayer.configureIjkPlayer() {
 }
 
 @Composable
-private fun PlayerSurface(player: ExoPlayer, fitMode: PlayerFitMode) {
+private fun PlayerSurface(player: ExoPlayer, modifier: Modifier = Modifier) {
     AndroidView(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier,
         factory = { context ->
             PlayerView(context).apply {
                 useController = false
-                resizeMode = fitMode.resizeMode
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
@@ -2088,13 +2436,64 @@ private fun PlayerSurface(player: ExoPlayer, fitMode: PlayerFitMode) {
         },
         update = {
             it.player = player
-            it.resizeMode = fitMode.resizeMode
+            it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
         },
         onRelease = {
             it.player = null
         }
     )
 }
+
+@Composable
+private fun PlayerVideoViewport(
+    fitMode: PlayerFitMode,
+    aspectRatio: Float,
+    content: @Composable (Modifier) -> Unit
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .clipToBounds(),
+        contentAlignment = Alignment.Center
+    ) {
+        val ratio = aspectRatio.takeIf { it.isFinite() && it > 0.1f } ?: 16f / 9f
+        val viewportRatio = if (maxHeight > 0.dp) maxWidth.value / maxHeight.value else ratio
+        val surfaceModifier = when (fitMode) {
+            PlayerFitMode.FIT -> {
+                if (ratio >= viewportRatio) {
+                    Modifier.width(maxWidth).height(maxWidth / ratio)
+                } else {
+                    Modifier.width(maxHeight * ratio).height(maxHeight)
+                }
+            }
+            PlayerFitMode.FILL_WIDTH -> Modifier.width(maxWidth).height(maxWidth / ratio)
+            PlayerFitMode.FILL_HEIGHT -> Modifier.width(maxHeight * ratio).height(maxHeight)
+            PlayerFitMode.CROP -> {
+                if (ratio >= viewportRatio) {
+                    Modifier.width(maxHeight * ratio).height(maxHeight)
+                } else {
+                    Modifier.width(maxWidth).height(maxWidth / ratio)
+                }
+            }
+            PlayerFitMode.STRETCH -> Modifier.fillMaxSize()
+        }
+        content(surfaceModifier)
+    }
+}
+
+private fun VideoSize.toAspectRatio(): Float? =
+    if (width > 0 && height > 0) {
+        width * pixelWidthHeightRatio / height
+    } else {
+        null
+    }
+
+private fun IMedia.VideoTrack.toAspectRatio(): Float? =
+    if (width > 0 && height > 0) {
+        width.toFloat() * sarNum.coerceAtLeast(1) / sarDen.coerceAtLeast(1) / height
+    } else {
+        null
+    }
 
 @Composable
 private fun PlayerChromeGradient() {
@@ -2285,6 +2684,7 @@ private fun PlayerTopBar(
 
 @Composable
 private fun PlayerBottomControls(
+    item: LibraryItem,
     player: ExoPlayer,
     isPlaying: Boolean,
     shuffleEnabled: Boolean,
@@ -2299,7 +2699,9 @@ private fun PlayerBottomControls(
     modifier: Modifier = Modifier
 ) {
     val compact = !expanded
-    val progress = if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f
+    var scrubPositionMs by remember(item.id) { mutableLongStateOf(-1L) }
+    val visiblePositionMs = scrubPositionMs.takeIf { it >= 0L } ?: positionMs
+    val progress = if (durationMs > 0L) visiblePositionMs.toFloat() / durationMs.toFloat() else 0f
     val timeStyle = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium
     val controlSpacing = if (compact) 6.dp else 8.dp
     Column(
@@ -2309,12 +2711,19 @@ private fun PlayerBottomControls(
             .padding(horizontal = if (compact) 12.dp else 18.dp, vertical = if (compact) 8.dp else 10.dp),
         verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 4.dp)
     ) {
+        if (scrubPositionMs >= 0L) {
+            TimelineScrubPreviewTrack(
+                item = item,
+                previewMs = scrubPositionMs,
+                durationMs = durationMs
+            )
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp)
         ) {
             Text(
-                text = formatTime(positionMs),
+                text = formatTime(visiblePositionMs),
                 style = timeStyle,
                 color = Color.White,
                 maxLines = 1,
@@ -2324,7 +2733,11 @@ private fun PlayerBottomControls(
             Slider(
                 value = progress.coerceIn(0f, 1f),
                 onValueChange = { value ->
-                    player.seekTo((durationMs * value).toLong())
+                    scrubPositionMs = (durationMs * value).toLong().coerceIn(0L, durationMs.coerceAtLeast(1L))
+                },
+                onValueChangeFinished = {
+                    scrubPositionMs.takeIf { it >= 0L }?.let(player::seekTo)
+                    scrubPositionMs = -1L
                 },
                 modifier = Modifier.weight(1f),
                 colors = SliderDefaults.colors(
@@ -2540,6 +2953,8 @@ private fun PlaybackSettingsPanel(
     expanded: Boolean,
     fitMode: PlayerFitMode,
     onFitModeChange: (PlayerFitMode) -> Unit,
+    aspectMode: PlayerAspectMode,
+    onAspectModeChange: (PlayerAspectMode) -> Unit,
     decodeMode: DecodeMode,
     onDecodeModeChange: (DecodeMode) -> Unit,
     soundBoost: SoundBoostMode,
@@ -2598,6 +3013,14 @@ private fun PlaybackSettingsPanel(
                 onSelected = onFitModeChange
             )
             EnumOptionSelector(
+                icon = Icons.Outlined.AspectRatio,
+                title = "画面比例",
+                options = PlayerAspectMode.entries,
+                selected = aspectMode,
+                label = { it.label },
+                onSelected = onAspectModeChange
+            )
+            EnumOptionSelector(
                 icon = Icons.Outlined.Tv,
                 title = "解码模式",
                 options = DecodeMode.entries,
@@ -2647,7 +3070,6 @@ private fun PlaybackSettingsPanel(
                 enabled = locked,
                 onToggle = { onLockedChange(!locked) }
             )
-            SettingsPanelRow(Icons.Outlined.AspectRatio, "画面比例", "原始比例")
         }
     }
 }

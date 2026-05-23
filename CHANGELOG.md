@@ -1,10 +1,30 @@
-# Changelog
+﻿# Changelog
 
-## 0.1.1 - 2026-05-20
+## 0.1.1 - 2026-05-23
 
+### 中文说明
+
+- 修复首页各分类点击“查看全部”在大媒体库中卡死的问题，改为轻量加载页加后台分批整理。
+- 修复首页“查看全部”分类结果不准确的问题，首页预览和完整列表现在使用同一套分类规则。
+- 优化继续观看、已播放、未播放、最近添加、全部、电影、剧集、自建系列等首页栏目逻辑。
+- 优化首页横向列表性能，只显示预览项，完整集合进入“查看全部”后再异步加载。
+- 优化媒体库筛选、排序和统计计算，减少进入大列表时的主线程阻塞。
+- 增加视频截图保存、默认截图位置、默认下载位置和进度条拖动缩略图预览。
+- 修复并优化播放器屏幕模式、画面比例模式和图片浏览左右切换动画。
+- 完善多语言界面、帮助文档、来源说明、元数据刮削配置、缓存管理和增量刷新体验。
+
+### English Notes
+
+- Fixed Home "View All" freezes in large libraries by moving collection preparation behind a lightweight loading route and staged background work.
+- Fixed incorrect Home "View All" category results by sharing one category model between Home rails and full collection views.
+- Improved Home section rules for Continue Watching, Played, Unplayed, Recently Added, All, Movies, Shows, and Custom Series.
+- Reduced Home rendering cost by limiting horizontal rails to preview items while full lists are prepared only when requested.
+- Moved heavier library filtering, sorting, and statistics projection work away from the first UI frame to reduce main-thread stalls.
+- Added video screenshot saving plus configurable default screenshot and download locations.
+- Added progress-bar drag preview thumbnails and refined player fit/aspect-ratio behavior.
+- Added animated left/right transitions in the image viewer.
 - Added multilingual interface support with follow-system, Simplified Chinese, and English options.
 - Localized the main navigation, Settings, Help guide, first-run guide, saved-library restore prompts, and common settings controls.
-- Added a shared UI string provider so new screens can be connected to the same localization layer without changing app navigation or layout.
 - Added source-scoped library refresh and metadata refresh so the selected media library can be updated without refreshing every source.
 - Improved metadata scraping configuration, including TMDB, TVDB, Bangumi, and OMDb / IMDb-style online sources with API key fields.
 - Added Baidu Netdisk and Aliyun Drive / PDS source entries, including in-app web OAuth login flow and token persistence.

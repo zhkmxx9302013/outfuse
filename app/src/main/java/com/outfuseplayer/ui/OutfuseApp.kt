@@ -63,6 +63,7 @@ import android.net.Uri
 import com.outfuseplayer.data.AppSettings
 import com.outfuseplayer.data.LocalMediaRepository
 import com.outfuseplayer.data.MediaLibraryStore
+import com.outfuseplayer.data.MediaOutputRepository
 import com.outfuseplayer.data.MediaSourceStore
 import com.outfuseplayer.data.NfoMetadataRepository
 import com.outfuseplayer.data.PlaybackPositionStore
@@ -95,6 +96,9 @@ import com.outfuseplayer.ui.FileActionRequest
 import com.outfuseplayer.ui.MetadataMatchUiState
 import com.outfuseplayer.ui.screens.DetailScreen
 import com.outfuseplayer.ui.screens.HomeScreen
+import com.outfuseplayer.ui.screens.HomeViewAllSection
+import com.outfuseplayer.ui.screens.homeSectionItems
+import com.outfuseplayer.ui.screens.homeSectionPreview
 import com.outfuseplayer.ui.screens.ImageViewerScreen
 import com.outfuseplayer.ui.screens.LibraryScreen
 import com.outfuseplayer.ui.screens.PlayerScreen
@@ -117,6 +121,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -236,8 +241,8 @@ private fun OutfuseAppContent(
     var root by rememberSaveable { mutableStateOf(RootDestination.HOME.name) }
     var detailId by rememberSaveable { mutableStateOf<String?>(null) }
     var playerId by remember { mutableStateOf<String?>(null) }
-    var homeBrowseTitle by rememberSaveable { mutableStateOf<String?>(null) }
-    var homeBrowseIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    // Home collections can contain thousands of items. Keep this transient route out of saved state.
+    var homeBrowseSection by remember { mutableStateOf<HomeViewAllSection?>(null) }
     var lastPlayedId by rememberSaveable { mutableStateOf(playbackPositionStore.lastPlayedItemId()) }
     var playQueue by remember { mutableStateOf<List<LibraryItem>>(emptyList()) }
     var startShuffle by remember { mutableStateOf(false) }
@@ -754,8 +759,16 @@ private fun OutfuseAppContent(
                     result.message
                 }
                 FileAction.DOWNLOAD -> {
-                    val downloads = File(context.getExternalFilesDir(null), "downloads")
-                    smbRepository.download(config, remotePath, downloads).message
+                    val result = smbRepository.download(
+                        config,
+                        remotePath,
+                        MediaOutputRepository.downloadWorkingDirectory(context, appSettings)
+                    )
+                    if (result.success && result.value != null) {
+                        MediaOutputRepository.exportDownloadedFile(context, appSettings, result.value).message
+                    } else {
+                        result.message
+                    }
                 }
             }
             libraryNotice = resultMessage
@@ -1080,8 +1093,7 @@ private fun OutfuseAppContent(
         lastPlayedId = item.id
         playerId = null
         detailId = null
-        homeBrowseTitle = null
-        homeBrowseIds = emptyList()
+        homeBrowseSection = null
         sourceRevealItem = item
         root = RootDestination.SOURCES.name
     }
@@ -1147,15 +1159,13 @@ private fun OutfuseAppContent(
         }
         startShuffle = false
         detailId = null
-        homeBrowseTitle = null
-        homeBrowseIds = emptyList()
+        homeBrowseSection = null
         playerId = item.id
     }
     fun openRoot(destination: RootDestination) {
         root = destination.name
         detailId = null
-        homeBrowseTitle = null
-        homeBrowseIds = emptyList()
+        homeBrowseSection = null
         sourceRevealItem = null
     }
 
@@ -1180,8 +1190,7 @@ private fun OutfuseAppContent(
                     sourceScanState = sourceScanState,
                     metadataState = metadataState,
                     sourceRevealItem = sourceRevealItem,
-                    homeBrowseTitle = homeBrowseTitle,
-                    homeBrowseIds = homeBrowseIds,
+                    homeBrowseSection = homeBrowseSection,
                     appSettings = appSettings,
                     startupDataRestored = startupDataRestored,
                     expanded = true,
@@ -1194,13 +1203,9 @@ private fun OutfuseAppContent(
                     onCreateSeries = ::createSeries,
                     onRenameSeries = ::renameSeries,
                     onSettingsChange = onSettingsChange,
-                    onHomeViewAll = { title, items ->
-                        homeBrowseTitle = title
-                        homeBrowseIds = items.map { it.id }
-                    },
+                    onHomeViewAll = { section -> homeBrowseSection = section },
                     onCloseHomeViewAll = {
-                        homeBrowseTitle = null
-                        homeBrowseIds = emptyList()
+                        homeBrowseSection = null
                     },
                     onSourceAdded = { source -> upsertSource(source) },
                     onSourceDeleted = { sourceId ->
@@ -1267,8 +1272,7 @@ private fun OutfuseAppContent(
                     sourceScanState = sourceScanState,
                     metadataState = metadataState,
                     sourceRevealItem = sourceRevealItem,
-                    homeBrowseTitle = homeBrowseTitle,
-                    homeBrowseIds = homeBrowseIds,
+                    homeBrowseSection = homeBrowseSection,
                     appSettings = appSettings,
                     startupDataRestored = startupDataRestored,
                     expanded = false,
@@ -1281,13 +1285,9 @@ private fun OutfuseAppContent(
                     onCreateSeries = ::createSeries,
                     onRenameSeries = ::renameSeries,
                     onSettingsChange = onSettingsChange,
-                    onHomeViewAll = { title, items ->
-                        homeBrowseTitle = title
-                        homeBrowseIds = items.map { it.id }
-                    },
+                    onHomeViewAll = { section -> homeBrowseSection = section },
                     onCloseHomeViewAll = {
-                        homeBrowseTitle = null
-                        homeBrowseIds = emptyList()
+                        homeBrowseSection = null
                     },
                     onSourceAdded = { source -> upsertSource(source) },
                     onSourceDeleted = { sourceId ->
@@ -1337,8 +1337,7 @@ private fun AppContent(
     sourceScanState: SourceScanUiState?,
     metadataState: MetadataMatchUiState?,
     sourceRevealItem: LibraryItem?,
-    homeBrowseTitle: String?,
-    homeBrowseIds: List<String>,
+    homeBrowseSection: HomeViewAllSection?,
     appSettings: AppSettings,
     startupDataRestored: Boolean,
     expanded: Boolean,
@@ -1351,7 +1350,7 @@ private fun AppContent(
     onCreateSeries: (String, List<LibraryItem>) -> Unit,
     onRenameSeries: (String, String) -> Unit,
     onSettingsChange: (AppSettings) -> Unit,
-    onHomeViewAll: (String, List<LibraryItem>) -> Unit,
+    onHomeViewAll: (HomeViewAllSection) -> Unit,
     onCloseHomeViewAll: () -> Unit,
     onSourceAdded: (com.outfuseplayer.model.MediaSource) -> Unit,
     onSourceDeleted: (String) -> Unit,
@@ -1382,16 +1381,14 @@ private fun AppContent(
 
     when (root) {
         RootDestination.HOME -> {
-            if (homeBrowseTitle != null) {
-                val collection = homeBrowseIds.mapNotNull { id -> libraryItems.firstOrNull { it.id == id } }
-                LibraryScreen(
-                    items = collection,
+            if (homeBrowseSection != null) {
+                HomeViewAllRoute(
+                    section = homeBrowseSection,
+                    libraryItems = libraryItems,
                     series = userSeries,
                     mediaSources = mediaSources,
                     metadataState = metadataState,
                     expanded = expanded,
-                    title = homeBrowseTitle,
-                    subtitle = "首页集合 · 可排序、筛选、随机播放",
                     onBack = onCloseHomeViewAll,
                     onItemClick = onOpenDetail,
                     onPlayQueue = onPlayQueue,
@@ -1438,10 +1435,10 @@ private fun AppContent(
             allItems = libraryItems,
             sources = mediaSources,
             series = userSeries,
-            continueWatching = libraryItems.filter { it.progress > 0f },
-            recent = libraryItems.takeLast(6).reversed(),
-            movies = libraryItems.filter { it.itemType != com.outfuseplayer.model.LibraryItemType.SHOW },
-            shows = libraryItems.filter { it.itemType == com.outfuseplayer.model.LibraryItemType.SHOW },
+            continueWatching = libraryItems.homeSectionPreview(HomeViewAllSection.CONTINUE_WATCHING),
+            recent = libraryItems.homeSectionPreview(HomeViewAllSection.RECENT),
+            movies = libraryItems.homeSectionPreview(HomeViewAllSection.MOVIES),
+            shows = libraryItems.homeSectionPreview(HomeViewAllSection.SHOWS),
             expanded = expanded,
             onItemClick = onOpenDetail,
             onPlay = onPlay,
@@ -1490,6 +1487,106 @@ private fun AppContent(
             onSettingsChange = onSettingsChange
         )
     }
+}
+
+@Composable
+private fun HomeViewAllRoute(
+    section: HomeViewAllSection,
+    libraryItems: List<LibraryItem>,
+    series: List<UserSeries>,
+    mediaSources: List<com.outfuseplayer.model.MediaSource>,
+    metadataState: MetadataMatchUiState?,
+    expanded: Boolean,
+    onBack: () -> Unit,
+    onItemClick: (LibraryItem) -> Unit,
+    onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit,
+    onRefreshLibrary: (String?) -> Unit,
+    onRefreshMetadata: (String?) -> Unit,
+    onCreateSeries: (String, List<LibraryItem>) -> Unit,
+    onFileAction: (FileActionRequest) -> Unit
+) {
+    var loading by remember(section, libraryItems.size, series.size) { mutableStateOf(true) }
+    var collection by remember(section, libraryItems.size, series.size) { mutableStateOf<List<LibraryItem>>(emptyList()) }
+
+    LaunchedEffect(section, libraryItems.size, libraryItems.firstOrNull()?.id, libraryItems.lastOrNull()?.id, series.size) {
+        loading = true
+        collection = emptyList()
+        val snapshot = copyLibraryItemsResponsively(libraryItems)
+        val seriesIds = if (section == HomeViewAllSection.SERIES) {
+            withContext(Dispatchers.Default) { series.flatMap { it.itemIds }.toSet() }
+        } else {
+            emptySet()
+        }
+        collection = withContext(Dispatchers.Default) {
+            snapshot.homeSectionItems(section, seriesIds)
+        }
+        loading = false
+    }
+
+    if (loading) {
+        HomeViewAllLoadingScreen(title = section.title, expanded = expanded, onBack = onBack)
+    } else {
+        LibraryScreen(
+            items = collection,
+            series = series,
+            mediaSources = mediaSources,
+            metadataState = metadataState,
+            expanded = expanded,
+            title = section.title,
+            subtitle = "首页集合 · 可排序、筛选、随机播放",
+            itemsStableForBackgroundRead = true,
+            onBack = onBack,
+            onItemClick = onItemClick,
+            onPlayQueue = onPlayQueue,
+            onRefreshLibrary = onRefreshLibrary,
+            onRefreshMetadata = onRefreshMetadata,
+            onCreateSeries = onCreateSeries,
+            onFileAction = onFileAction
+        )
+    }
+}
+
+@Composable
+private fun HomeViewAllLoadingScreen(
+    title: String,
+    expanded: Boolean,
+    onBack: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .safeDrawingPadding()
+            .padding(horizontal = if (expanded) 32.dp else 20.dp, vertical = 8.dp)
+    ) {
+        OutlinedButton(onClick = onBack) {
+            Text("返回")
+        }
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                CircularProgressIndicator(color = PrimaryOrange)
+                Text(
+                    text = "正在打开$title",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextMuted
+                )
+            }
+        }
+    }
+}
+
+private suspend fun copyLibraryItemsResponsively(items: List<LibraryItem>): List<LibraryItem> {
+    if (items.isEmpty()) return emptyList()
+    val result = ArrayList<LibraryItem>(items.size)
+    var index = 0
+    while (index < items.size) {
+        val end = minOf(index + 512, items.size)
+        for (itemIndex in index until end) {
+            result += items[itemIndex]
+        }
+        index = end
+        if (index < items.size) yield()
+    }
+    return result
 }
 
 @Composable

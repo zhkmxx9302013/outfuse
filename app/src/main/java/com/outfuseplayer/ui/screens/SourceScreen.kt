@@ -104,6 +104,8 @@ import com.outfuseplayer.data.smb.isVideoFileName
 import com.outfuseplayer.data.smb.toLibraryItem
 import com.outfuseplayer.data.smb.toReadableSize
 import com.outfuseplayer.data.LocalMediaRepository
+import com.outfuseplayer.data.MediaOutputRepository
+import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.data.discovery.DiscoveredService
 import com.outfuseplayer.data.discovery.NetworkDiscoveryRepository
 import com.outfuseplayer.data.remote.CloudDriveRepository
@@ -980,7 +982,20 @@ private fun RemoteBrowserScreen(
                                 FileAction.DELETE -> webDavRepository.delete(currentConfig, entry.path)
                                 FileAction.RENAME -> webDavRepository.rename(currentConfig, entry.path, value)
                                 FileAction.MOVE -> webDavRepository.move(currentConfig, entry.path, value)
-                                FileAction.DOWNLOAD -> webDavRepository.download(currentConfig, entry.path, File(context.getExternalFilesDir(null), "downloads"))
+                                FileAction.DOWNLOAD -> {
+                                    val outputSettings = SettingsStore(context).load()
+                                    val downloadResult = webDavRepository.download(
+                                        currentConfig,
+                                        entry.path,
+                                        MediaOutputRepository.downloadWorkingDirectory(context, outputSettings)
+                                    )
+                                    if (downloadResult.success && downloadResult.value != null) {
+                                        MediaOutputRepository.exportDownloadedFile(context, outputSettings, downloadResult.value)
+                                            .let { com.outfuseplayer.data.remote.RemoteActionResult(it.success, it.message, it.file) }
+                                    } else {
+                                        downloadResult
+                                    }
+                                }
                             }
                             if (result.success && action != FileAction.DOWNLOAD) {
                                 onMediaRemoved(currentConfig.sourceId, listOf(entry.path))
@@ -1677,9 +1692,9 @@ private fun AddSmbPanel(
                     Text(
                         text = when (type) {
                             SourceType.LOCAL -> "支持扫描系统媒体库，或选择本机文件夹递归加入媒体库"
-                            SourceType.WEBDAV -> "支持目录浏览、递归扫描、图片/GIF 预览和视频播放"
-                            SourceType.JELLYFIN -> "支持登录、媒体库浏览、封面和直连播放"
-                            SourceType.EMBY -> "支持 Emby 登录、媒体库浏览、封面和直连播放"
+                            SourceType.WEBDAV -> "支持目录浏览、递归扫描、图片/GIF 预览和视频播放，无需 SMB 共享名"
+                            SourceType.JELLYFIN -> "支持登录、媒体库浏览、封面和直连播放，无需 SMB 共享名"
+                            SourceType.EMBY -> "支持 Emby 登录、媒体库浏览、封面和直连播放，无需 SMB 共享名"
                             SourceType.BAIDU_NETDISK -> "使用百度网盘开放平台 Access Token 浏览和扫描媒体"
                             SourceType.ALIYUN_DRIVE -> "使用阿里网盘 Access Token 与 Drive ID 浏览和扫描媒体"
                             else -> "支持 SMB2/3 连接、目录浏览、图片预览和视频播放列表"
@@ -1716,9 +1731,9 @@ private fun AddSmbPanel(
                     }
                     status = when (it) {
                         SourceType.LOCAL -> "选择扫描系统媒体库，或选择本机目录后自动递归扫描。"
-                        SourceType.WEBDAV -> "填写 WebDAV 地址后可测试、浏览或保存扫描，支持 https:// 校验。"
-                        SourceType.JELLYFIN -> "填写 Jellyfin 地址和用户名密码，或直接填写 API Key。"
-                        SourceType.EMBY -> "填写 Emby 地址和用户名密码，或直接填写 API Key。"
+                        SourceType.WEBDAV -> "填写 WebDAV 地址后可测试、浏览或保存扫描；共享名只对 SMB 必填。"
+                        SourceType.JELLYFIN -> "填写 Jellyfin 地址和用户名密码，或直接填写 API Key；无需共享名。"
+                        SourceType.EMBY -> "填写 Emby 地址和用户名密码，或直接填写 API Key；无需共享名。"
                         SourceType.BAIDU_NETDISK -> "填写百度网盘 Access Token，可浏览目录并扫描媒体。"
                         SourceType.ALIYUN_DRIVE -> "填写阿里网盘 Access Token 与 Drive ID，可浏览目录并扫描媒体。"
                         else -> "填写 SMB 信息后点“连接并浏览”，可直接点媒体加入播放列表。"
@@ -1833,7 +1848,7 @@ private fun AddSmbPanel(
                 SourceTextField("端口", portText, { portText = it.filter(Char::isDigit).take(5) }, modifier = Modifier.width(92.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SourceTextField("共享名", share, { share = it }, modifier = Modifier.weight(1f))
+                SourceTextField("共享名（SMB 必填）", share, { share = it }, modifier = Modifier.weight(1f))
                 SourceTextField("路径", path, { path = it }, modifier = Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3237,13 +3252,12 @@ private fun performLocalDocumentAction(
             }
             FileAction.DOWNLOAD -> {
                 require(!entry.isDirectory) { "文件夹暂不支持下载" }
-                val downloads = File(context.getExternalFilesDir(null), "downloads").apply { mkdirs() }
-                val target = File(downloads, entry.name.ifBlank { "local-download" })
-                resolver.openInputStream(documentUri).use { input ->
-                    requireNotNull(input) { "无法读取文件" }
-                    target.outputStream().use { output -> input.copyTo(output) }
-                }
-                "已下载到 ${target.absolutePath}"
+                MediaOutputRepository.copyDocumentToDownloadLocation(
+                    context = context,
+                    settings = SettingsStore(context).load(),
+                    sourceUri = documentUri,
+                    fileName = entry.name
+                ).message
             }
         }
     }.getOrElse { "文件操作失败：${it.message ?: it.javaClass.simpleName}" }

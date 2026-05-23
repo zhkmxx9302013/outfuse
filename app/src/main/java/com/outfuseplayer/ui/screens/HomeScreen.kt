@@ -65,6 +65,88 @@ import com.outfuseplayer.ui.theme.SoftTeal
 import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import com.outfuseplayer.ui.theme.TextMuted
 
+enum class HomeViewAllSection(val title: String) {
+    CONTINUE_WATCHING("继续观看"),
+    PLAYED("已播放"),
+    UNPLAYED("未播放"),
+    RECENT("最近添加"),
+    ALL("全部"),
+    MOVIES("电影"),
+    SHOWS("剧集"),
+    SERIES("自建系列")
+}
+
+private const val HomeRailPreviewLimit = 24
+
+fun List<LibraryItem>.homeSectionItems(
+    section: HomeViewAllSection,
+    seriesIds: Set<String> = emptySet()
+): List<LibraryItem> =
+    when (section) {
+        HomeViewAllSection.CONTINUE_WATCHING -> asSequence()
+            .filter { it.isPlayableMedia() && it.progress > 0f && it.progress < 0.95f }
+            .toList()
+        HomeViewAllSection.PLAYED -> asSequence()
+            .filter { it.isPlayableMedia() && it.progress >= 0.95f }
+            .toList()
+        HomeViewAllSection.UNPLAYED -> asSequence()
+            .filter { it.isPlayableMedia() && it.progress <= 0f }
+            .toList()
+        HomeViewAllSection.RECENT -> asReversed().asSequence()
+            .filter { it.isPlayableMedia() }
+            .toList()
+        HomeViewAllSection.ALL -> filter { it.isPlayableMedia() }
+        HomeViewAllSection.MOVIES -> asSequence()
+            .filter { it.isMovieSectionItem() }
+            .toList()
+        HomeViewAllSection.SHOWS -> asSequence()
+            .filter { it.isShowSectionItem() }
+            .toList()
+        HomeViewAllSection.SERIES -> asSequence()
+            .filter { it.id in seriesIds }
+            .toList()
+    }
+
+fun List<LibraryItem>.homeSectionPreview(
+    section: HomeViewAllSection,
+    seriesIds: Set<String> = emptySet(),
+    limit: Int = HomeRailPreviewLimit
+): List<LibraryItem> =
+    when (section) {
+        HomeViewAllSection.CONTINUE_WATCHING -> asSequence()
+            .filter { it.isPlayableMedia() && it.progress > 0f && it.progress < 0.95f }
+            .take(limit)
+            .toList()
+        HomeViewAllSection.PLAYED -> asSequence()
+            .filter { it.isPlayableMedia() && it.progress >= 0.95f }
+            .take(limit)
+            .toList()
+        HomeViewAllSection.UNPLAYED -> asSequence()
+            .filter { it.isPlayableMedia() && it.progress <= 0f }
+            .take(limit)
+            .toList()
+        HomeViewAllSection.RECENT -> asReversed().asSequence()
+            .filter { it.isPlayableMedia() }
+            .take(limit)
+            .toList()
+        HomeViewAllSection.ALL -> asSequence()
+            .filter { it.isPlayableMedia() }
+            .take(limit)
+            .toList()
+        HomeViewAllSection.MOVIES -> asSequence()
+            .filter { it.isMovieSectionItem() }
+            .take(limit)
+            .toList()
+        HomeViewAllSection.SHOWS -> asSequence()
+            .filter { it.isShowSectionItem() }
+            .take(limit)
+            .toList()
+        HomeViewAllSection.SERIES -> asSequence()
+            .filter { it.id in seriesIds }
+            .take(limit)
+            .toList()
+    }
+
 @Composable
 fun HomeScreen(
     featured: LibraryItem,
@@ -78,7 +160,7 @@ fun HomeScreen(
     expanded: Boolean,
     onItemClick: (LibraryItem) -> Unit,
     onPlay: (LibraryItem) -> Unit,
-    onViewAll: (String, List<LibraryItem>) -> Unit
+    onViewAll: (HomeViewAllSection) -> Unit
 ) {
     val context = LocalContext.current
     val layoutStore = remember { HomeLayoutStore(context) }
@@ -97,12 +179,17 @@ fun HomeScreen(
     val showMovies = HomeLayoutStore.MOVIES in visibleSections
     val showShows = HomeLayoutStore.SHOWS in visibleSections
     val showSeries = HomeLayoutStore.SERIES in visibleSections
-    val played = allItems.filter { it.progress >= 0.95f }
-    val unplayed = allItems.filter { it.progress <= 0f }
-    val allMedia = allItems.filter { it.streamUrl != null }
-    val seriesItems = series.flatMap { collection ->
-        collection.itemIds.mapNotNull { id -> allItems.firstOrNull { it.id == id } }
-    }.distinctBy { it.id }
+    val played = remember(allItems.size) { allItems.homeSectionPreview(HomeViewAllSection.PLAYED) }
+    val unplayed = remember(allItems.size) { allItems.homeSectionPreview(HomeViewAllSection.UNPLAYED) }
+    val allMedia = remember(allItems.size) { allItems.homeSectionPreview(HomeViewAllSection.ALL) }
+    val seriesItems = remember(allItems.size, series.size) {
+        val wantedIds = series.asSequence()
+            .flatMap { it.itemIds.asSequence() }
+            .distinct()
+            .take(HomeRailPreviewLimit)
+            .toSet()
+        allItems.homeSectionPreview(HomeViewAllSection.SERIES, wantedIds)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -153,7 +240,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 148.dp else 126.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("继续观看", continueWatching) }
+                onActionClick = { onViewAll(HomeViewAllSection.CONTINUE_WATCHING) }
             )
         }
         if (showPlayed && played.isNotEmpty()) item {
@@ -164,7 +251,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("已播放", played) }
+                onActionClick = { onViewAll(HomeViewAllSection.PLAYED) }
             )
         }
         if (showUnplayed && unplayed.isNotEmpty()) item {
@@ -175,7 +262,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("未播放", unplayed) }
+                onActionClick = { onViewAll(HomeViewAllSection.UNPLAYED) }
             )
         }
         if (showRecent && recent.isNotEmpty()) item {
@@ -186,7 +273,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("最近添加", recent) }
+                onActionClick = { onViewAll(HomeViewAllSection.RECENT) }
             )
         }
         if (showAll && allMedia.isNotEmpty()) item {
@@ -197,7 +284,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("全部", allMedia) }
+                onActionClick = { onViewAll(HomeViewAllSection.ALL) }
             )
         }
         if (showMovies && movies.isNotEmpty()) item {
@@ -208,7 +295,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("电影", movies) }
+                onActionClick = { onViewAll(HomeViewAllSection.MOVIES) }
             )
         }
         if (showShows && shows.isNotEmpty()) item {
@@ -219,7 +306,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("剧集", shows) }
+                onActionClick = { onViewAll(HomeViewAllSection.SHOWS) }
             )
         }
         if (showSeries && seriesItems.isNotEmpty()) item {
@@ -230,7 +317,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 action = "查看全部",
-                onActionClick = { onViewAll("自建系列", seriesItems) }
+                onActionClick = { onViewAll(HomeViewAllSection.SERIES) }
             )
         }
     }
@@ -409,18 +496,29 @@ private fun SourceStatusStrip(
     sources: List<MediaSource>,
     items: List<LibraryItem>
 ) {
-    val stats = sources.map { source ->
-        val sourceItems = items.filter { it.sourceId == source.id || it.sourceName == source.name }
-        val videos = sourceItems.count { it.itemType != LibraryItemType.IMAGE && it.streamUrl != null }
-        val images = sourceItems.count { it.itemType == LibraryItemType.IMAGE }
-        val subtitle = if (sourceItems.isEmpty()) {
-            "0 个媒体"
-        } else {
-            "$videos 个视频 · $images 张图片"
+    val sourceKey = sources.joinToString("|") { "${it.id}:${it.name}:${it.health}" }
+    val stats = remember(items.size, sourceKey) {
+        val counts = sources.associate { source -> source.id to SourceMediaCount(source.name, source.health.homeColor) }.toMutableMap()
+        val sourceIdByName = sources.associateBy { it.name }
+        items.forEach { item ->
+            val match = counts[item.sourceId] ?: sourceIdByName[item.sourceName]?.let { source ->
+                counts.getOrPut(source.id) { SourceMediaCount(source.name, source.health.homeColor) }
+            }
+            if (match != null) {
+                if (item.itemType == LibraryItemType.IMAGE) match.images += 1
+                if (item.itemType != LibraryItemType.IMAGE && item.streamUrl != null) match.videos += 1
+            }
         }
-        Triple(source.name, subtitle, source.health.homeColor)
-    }.ifEmpty {
-        listOf(Triple("媒体库", "0 个媒体", PrimaryOrange))
+        counts.values.map { count ->
+            val subtitle = if (count.videos == 0 && count.images == 0) {
+                "0 个媒体"
+            } else {
+                "${count.videos} 个视频 · ${count.images} 张图片"
+            }
+            Triple(count.name, subtitle, count.color)
+        }.ifEmpty {
+            listOf(Triple("媒体库", "0 个媒体", PrimaryOrange))
+        }
     }
     LazyRow(
         contentPadding = PaddingValues(horizontal = if (expanded) 32.dp else 20.dp),
@@ -455,6 +553,38 @@ private fun SourceStatusStrip(
             }
         }
     }
+}
+
+private data class SourceMediaCount(
+    val name: String,
+    val color: Color,
+    var videos: Int = 0,
+    var images: Int = 0
+)
+
+private fun LibraryItem.isPlayableMedia(): Boolean =
+    streamUrl != null && itemType != LibraryItemType.FOLDER
+
+private fun LibraryItem.isMovieSectionItem(): Boolean =
+    streamUrl != null &&
+        itemType != LibraryItemType.IMAGE &&
+        itemType != LibraryItemType.FOLDER &&
+        itemType != LibraryItemType.SHOW &&
+        !looksLikeEpisode()
+
+private fun LibraryItem.isShowSectionItem(): Boolean =
+    streamUrl != null &&
+        itemType != LibraryItemType.IMAGE &&
+        itemType != LibraryItemType.FOLDER &&
+        (itemType == LibraryItemType.SHOW || seasonNumber != null || episodeNumber != null || looksLikeEpisode())
+
+private fun LibraryItem.looksLikeEpisode(): Boolean {
+    val text = listOf(title, originalTitle.orEmpty(), path)
+        .joinToString(" ")
+        .lowercase()
+    return Regex("""\bs\d{1,2}e\d{1,3}\b""").containsMatchIn(text) ||
+        Regex("""\b\d{1,2}x\d{1,3}\b""").containsMatchIn(text) ||
+        Regex("""第\s*\d{1,2}\s*[季部].*第\s*\d{1,3}\s*[集话話]""").containsMatchIn(text)
 }
 
 private val SourceHealth.homeColor: Color

@@ -8,8 +8,10 @@ import android.os.Build
 import android.widget.ImageView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -95,6 +97,8 @@ fun ImageViewerScreen(
         mutableStateOf(imageItems.indexOfFirst { it.id == item.id }.takeIf { it >= 0 } ?: 0)
     }
     var dragPixels by remember { mutableStateOf(0f) }
+    var pageSwitchDirection by remember { mutableStateOf(0) }
+    val pageSlide = remember { Animatable(0f) }
     var scale by remember(currentIndex) { mutableStateOf(1f) }
     var offsetX by remember(currentIndex) { mutableStateOf(0f) }
     var offsetY by remember(currentIndex) { mutableStateOf(0f) }
@@ -107,10 +111,20 @@ fun ImageViewerScreen(
     val uri = remember(currentItem.streamUrl) { currentItem.streamUrl?.let(Uri::parse) }
     val isGif = currentItem.isGifImage()
 
-    fun selectIndex(index: Int, revealStrip: Boolean = true) {
-        currentIndex = index.coerceIn(0, imageItems.lastIndex)
-        if (revealStrip && imageItems.size > 1) {
-            stripVisible = true
+    fun selectIndex(index: Int) {
+        val targetIndex = index.coerceIn(0, imageItems.lastIndex)
+        if (targetIndex == currentIndex) return
+        pageSwitchDirection = if (targetIndex > currentIndex) 1 else -1
+        currentIndex = targetIndex
+    }
+
+    LaunchedEffect(currentIndex, pageSwitchDirection) {
+        if (pageSwitchDirection != 0) {
+            pageSlide.snapTo(pageSwitchDirection.toFloat())
+            pageSlide.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 260)
+            )
         }
     }
 
@@ -121,15 +135,19 @@ fun ImageViewerScreen(
             val config = SmbCredentialRegistry.find(uri!!)
             if (config == null) {
                 message = "缺少 SMB 凭据，请从来源页重新连接。"
-            } else {
+            } else if (currentItem.isGifImage()) {
                 val path = uri.pathSegments.drop(1).joinToString("\\").toRemotePath()
-                val maxBytes = if (currentItem.isGifImage()) 256 * 1024 * 1024 else 512 * 1024 * 1024
-                val result = SmbRepository().readBytes(config, path, maxBytes = maxBytes)
+                val result = SmbRepository().readBytes(config, path, maxBytes = 96 * 1024 * 1024)
                 imageBytes = result.value
                 message = result.message
+            } else {
+                decodedBitmap = ThumbnailRepository.imageBitmap(context, currentItem, maxBytes = 96 * 1024 * 1024)
+                if (decodedBitmap == null) {
+                    message = "图片解码失败"
+                }
             }
         } else if (uri != null && currentItem.isGifImage()) {
-            imageBytes = ThumbnailRepository.imageBytes(context, currentItem, maxBytes = 256 * 1024 * 1024)
+            imageBytes = ThumbnailRepository.imageBytes(context, currentItem, maxBytes = 96 * 1024 * 1024)
             if (imageBytes == null) {
                 message = "GIF 加载失败"
             }
@@ -140,9 +158,9 @@ fun ImageViewerScreen(
                     message = "图片解码失败"
                 }
             } else {
-                imageBytes = ThumbnailRepository.imageBytes(context, currentItem, maxBytes = 256 * 1024 * 1024)
-                if (imageBytes == null) {
-                    message = "图片加载失败"
+                decodedBitmap = ThumbnailRepository.imageBitmap(context, currentItem, maxBytes = 96 * 1024 * 1024)
+                if (decodedBitmap == null) {
+                    message = "图片解码失败"
                 }
             }
         }
@@ -168,6 +186,7 @@ fun ImageViewerScreen(
                             offsetY = 0f
                         } else {
                             val targetScale = 2.5f
+                            stripVisible = false
                             scale = targetScale
                             offsetX = (size.width / 2f - tapOffset.x) * (targetScale - 1f)
                             offsetY = (size.height / 2f - tapOffset.y) * (targetScale - 1f)
@@ -175,11 +194,12 @@ fun ImageViewerScreen(
                     }
                 )
             }
-            .pointerInput(currentIndex) {
+            .pointerInput(currentIndex, scale) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     val nextScale = (scale * zoom).coerceIn(1f, 6f)
                     scale = nextScale
                     if (nextScale > 1f) {
+                        stripVisible = false
                         offsetX += pan.x
                         offsetY += pan.y
                     } else {
@@ -188,11 +208,10 @@ fun ImageViewerScreen(
                     }
                 }
             }
-            .pointerInput(imageItems.size, currentIndex, scale) {
+            .pointerInput(imageItems.size, currentIndex) {
                 detectHorizontalDragGestures(
                     onDragStart = {
                         dragPixels = 0f
-                        if (scale <= 1.05f && imageItems.size > 1) stripVisible = true
                     },
                     onHorizontalDrag = { change, dragAmount ->
                         if (scale <= 1.05f) {
@@ -230,13 +249,15 @@ fun ImageViewerScreen(
             animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
             label = "imageOffsetY"
         )
+        val pageSlideProgress = pageSlide.value
         val imageModifier = Modifier
             .fillMaxSize()
             .graphicsLayer {
                 scaleX = animatedScale
                 scaleY = animatedScale
-                translationX = animatedOffsetX
+                translationX = animatedOffsetX + pageSlideProgress * size.width
                 translationY = animatedOffsetY
+                alpha = 1f - (kotlin.math.abs(pageSlideProgress) * 0.12f)
             }
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && bytes != null -> {
@@ -351,7 +372,7 @@ fun ImageViewerScreen(
             ImageSwitchStrip(
                 images = imageItems,
                 currentIndex = currentIndex,
-                onSelect = { selectIndex(it, revealStrip = true) },
+                onSelect = { selectIndex(it) },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .safeDrawingPadding()

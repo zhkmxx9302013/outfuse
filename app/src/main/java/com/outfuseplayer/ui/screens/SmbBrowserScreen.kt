@@ -71,6 +71,8 @@ import com.outfuseplayer.data.smb.SmbRepository
 import com.outfuseplayer.data.smb.toLibraryItem
 import com.outfuseplayer.data.smb.toReadableSize
 import com.outfuseplayer.data.smb.toRemotePath
+import com.outfuseplayer.data.MediaOutputRepository
+import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.SourceHealth
@@ -301,7 +303,20 @@ fun SmbBrowserScreen(
                         FileAction.DELETE -> repository.delete(config, entry.path, entry.isDirectory)
                         FileAction.RENAME -> repository.rename(config, entry.path, value)
                         FileAction.MOVE -> repository.move(config, entry.path, value)
-                        FileAction.DOWNLOAD -> repository.download(config, entry.path, File(context.getExternalFilesDir(null), "downloads"))
+                        FileAction.DOWNLOAD -> {
+                            val outputSettings = SettingsStore(context).load()
+                            val downloadResult = repository.download(
+                                config,
+                                entry.path,
+                                MediaOutputRepository.downloadWorkingDirectory(context, outputSettings)
+                            )
+                            if (downloadResult.success && downloadResult.value != null) {
+                                MediaOutputRepository.exportDownloadedFile(context, outputSettings, downloadResult.value)
+                                    .let { com.outfuseplayer.data.smb.SmbActionResult(it.success, it.message, it.file) }
+                            } else {
+                                downloadResult
+                            }
+                        }
                     }
                     if (result.success && action != FileAction.DOWNLOAD) {
                         onMediaRemoved(config.sourceId, listOf(entry.path))

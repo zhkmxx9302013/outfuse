@@ -297,7 +297,7 @@ private fun GifPreviewThumb(
         bytes = if (uri?.scheme.equals("content", ignoreCase = true) || uri?.scheme.equals("file", ignoreCase = true)) {
             null
         } else {
-            ThumbnailRepository.imageBytes(context, item, maxBytes = 128 * 1024 * 1024)
+            ThumbnailRepository.imageBytes(context, item, maxBytes = 24 * 1024 * 1024)
         }
     }
     val data = bytes

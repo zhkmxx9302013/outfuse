@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.ViewComfy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -54,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -90,7 +92,10 @@ import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 
 private object LibraryScrollMemory {
     var filterName: String = LibraryFilter.ALL.name
@@ -124,6 +129,9 @@ fun LibraryScreen(
     expanded: Boolean,
     title: String = "媒体库",
     subtitle: String = "按来源、类型和文件系统浏览你的媒体",
+    collectionSection: HomeViewAllSection? = null,
+    collectionSeriesIds: Set<String> = emptySet(),
+    itemsStableForBackgroundRead: Boolean = false,
     onBack: (() -> Unit)? = null,
     onItemClick: (LibraryItem) -> Unit,
     onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit,
@@ -155,31 +163,48 @@ fun LibraryScreen(
         initialFirstVisibleItemIndex = if (useSharedScrollMemory) rememberedListIndex else 0,
         initialFirstVisibleItemScrollOffset = if (useSharedScrollMemory) LibraryScrollMemory.listFirstVisibleItemScrollOffset else 0
     )
-    val filter = LibraryFilter.valueOf(filterName)
-    val sort = MediaSort.valueOf(sortName)
-    val layout = MediaLayout.valueOf(layoutName)
-    val sourceFiltered = sourceFilterId?.let { id -> items.filter { it.sourceId == id } } ?: items
-    val filtered = sourceFiltered.filter { item ->
-        when (filter) {
-            LibraryFilter.ALL -> true
-            LibraryFilter.FILES -> item.streamUrl != null
-            LibraryFilter.VIDEOS -> item.isVideoMedia()
-            LibraryFilter.IMAGES -> item.isImageMedia()
-            LibraryFilter.UNWATCHED -> item.progress <= 0f
-            LibraryFilter.WATCHED -> item.progress >= 0.95f
-            LibraryFilter.MOVIES -> item.itemType == LibraryItemType.MOVIE
-            LibraryFilter.SHOWS -> item.itemType == LibraryItemType.SHOW
+    val filter = enumValueOrDefault(filterName, LibraryFilter.ALL)
+    val sort = enumValueOrDefault(sortName, MediaSort.NAME)
+    val layout = enumValueOrDefault(layoutName, MediaLayout.LARGE)
+    val projectionKey = remember(items.size, collectionSection, collectionSeriesIds.size) {
+        LibraryProjectionKey(
+            size = items.size,
+            firstId = items.firstOrNull()?.id,
+            lastId = items.lastOrNull()?.id,
+            collectionSection = collectionSection,
+            collectionSeriesSize = collectionSeriesIds.size
+        )
+    }
+    val projection by produceState(
+        initialValue = LibraryProjection.loading(items.size),
+        projectionKey,
+        sourceFilterId,
+        filter,
+        sort,
+        sortAscending
+    ) {
+        val snapshot = if (itemsStableForBackgroundRead) {
+            withContext(Dispatchers.Default) { items.toList() }
+        } else {
+            copyLibraryItemsResponsively(items)
         }
-    }.sortedLibraryFor(sort, sortAscending)
-    val playableVideos = filtered.filter { it.isVideoMedia() }
-    val selectedItems = filtered.filter { it.id in selectedIds }
-    val selectedIdSet = selectedIds.toSet()
-    val stats = LibraryStats(
-        total = items.size,
-        files = items.count { it.streamUrl != null },
-        videos = items.count { it.isVideoMedia() },
-        images = items.count { it.isImageMedia() }
-    )
+        val seriesIdSnapshot = if (itemsStableForBackgroundRead) {
+            withContext(Dispatchers.Default) { collectionSeriesIds.toSet() }
+        } else {
+            collectionSeriesIds.toSet()
+        }
+        value = LibraryProjection.loading(snapshot.size)
+        value = withContext(Dispatchers.Default) {
+            buildLibraryProjection(snapshot, sourceFilterId, filter, sort, sortAscending, collectionSection, seriesIdSnapshot)
+        }
+    }
+    val filtered = projection.filtered
+    val playableVideos = projection.playableVideos
+    val stats = projection.stats
+    val selectedIdSet = remember(selectedIds) { selectedIds.toSet() }
+    val selectedItems = remember(filtered, selectedIdSet) {
+        if (selectedIdSet.isEmpty()) emptyList() else filtered.filter { it.id in selectedIdSet }
+    }
 
     LaunchedEffect(gridState, useSharedScrollMemory) {
         if (!useSharedScrollMemory) return@LaunchedEffect
@@ -210,8 +235,11 @@ fun LibraryScreen(
         LibraryScrollMemory.sourceFilterId = sourceFilterId
     }
 
-    LaunchedEffect(filtered.map { it.id }) {
-        selectedIds = selectedIds.filter { id -> filtered.any { it.id == id } }
+    LaunchedEffect(filtered.size, selectionMode) {
+        if (selectedIds.isNotEmpty()) {
+            val filteredIds = filtered.asSequence().map { it.id }.toSet()
+            selectedIds = selectedIds.filter { it in filteredIds }
+        }
     }
 
     fun toggleSelection(item: LibraryItem) {
@@ -278,7 +306,9 @@ fun LibraryScreen(
             onRefreshLibrary = onRefreshLibrary?.let { refresh -> { refresh(sourceFilterId) } },
             onRefreshMetadata = onRefreshMetadata?.let { refresh -> { refresh(sourceFilterId) } }
         )
-        if (layout == MediaLayout.LIST) {
+        if (projection.loading) {
+            LibraryLoadingState(modifier = Modifier.fillMaxSize())
+        } else if (layout == MediaLayout.LIST) {
             LibraryList(
                 items = filtered,
                 series = series,
@@ -348,6 +378,23 @@ fun LibraryScreen(
                 createSeriesDialogVisible = false
             }
         )
+    }
+}
+
+@Composable
+private fun LibraryLoadingState(modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            CircularProgressIndicator(color = PrimaryOrange)
+            Text(
+                text = "正在整理媒体列表",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted
+            )
+        }
     }
 }
 
@@ -968,6 +1015,86 @@ private data class LibraryStats(
     val images: Int
 )
 
+private data class LibraryProjection(
+    val filtered: List<LibraryItem>,
+    val playableVideos: List<LibraryItem>,
+    val stats: LibraryStats,
+    val loading: Boolean = false
+) {
+    companion object {
+        fun loading(total: Int): LibraryProjection = LibraryProjection(
+            filtered = emptyList(),
+            playableVideos = emptyList(),
+            stats = LibraryStats(total = total, files = 0, videos = 0, images = 0),
+            loading = true
+        )
+    }
+}
+
+private data class LibraryProjectionKey(
+    val size: Int,
+    val firstId: String?,
+    val lastId: String?,
+    val collectionSection: HomeViewAllSection?,
+    val collectionSeriesSize: Int
+)
+
+private fun buildLibraryProjection(
+    items: List<LibraryItem>,
+    sourceFilterId: String?,
+    filter: LibraryFilter,
+    sort: MediaSort,
+    sortAscending: Boolean,
+    collectionSection: HomeViewAllSection?,
+    collectionSeriesIds: Set<String>
+): LibraryProjection {
+    val scoped = collectionSection?.let { section ->
+        items.homeSectionItems(section, collectionSeriesIds)
+    } ?: items
+    val sourceFiltered = sourceFilterId?.let { id -> scoped.filter { it.sourceId == id } } ?: scoped
+    val filtered = sourceFiltered.asSequence()
+        .filter { it.matchesLibraryFilter(filter) }
+        .toList()
+        .sortedLibraryFor(sort, sortAscending)
+    return LibraryProjection(
+        filtered = filtered,
+        playableVideos = filtered.filter { it.isVideoMedia() },
+        stats = LibraryStats(
+            total = scoped.size,
+            files = scoped.count { it.streamUrl != null },
+            videos = scoped.count { it.isVideoMedia() },
+            images = scoped.count { it.isImageMedia() }
+        )
+    )
+}
+
+private suspend fun copyLibraryItemsResponsively(items: List<LibraryItem>): List<LibraryItem> {
+    if (items.isEmpty()) return emptyList()
+    val result = ArrayList<LibraryItem>(items.size)
+    var index = 0
+    while (index < items.size) {
+        val end = minOf(index + 512, items.size)
+        for (itemIndex in index until end) {
+            result += items[itemIndex]
+        }
+        index = end
+        if (index < items.size) yield()
+    }
+    return result
+}
+
+private fun LibraryItem.matchesLibraryFilter(filter: LibraryFilter): Boolean =
+    when (filter) {
+        LibraryFilter.ALL -> true
+        LibraryFilter.FILES -> streamUrl != null
+        LibraryFilter.VIDEOS -> isVideoMedia()
+        LibraryFilter.IMAGES -> isImageMedia()
+        LibraryFilter.UNWATCHED -> progress <= 0f
+        LibraryFilter.WATCHED -> progress >= 0.95f
+        LibraryFilter.MOVIES -> itemType == LibraryItemType.MOVIE
+        LibraryFilter.SHOWS -> itemType == LibraryItemType.SHOW
+    }
+
 @Composable
 private fun SeriesBadge(labels: List<String>, modifier: Modifier = Modifier) {
     val first = labels.firstOrNull() ?: return
@@ -1005,6 +1132,9 @@ private fun navigationLabels(items: List<LibraryItem>, sort: MediaSort, ascendin
     val values = items.map { it.navigationLabel(sort) }.distinct().take(36)
     return values.ifEmpty { listOf("全") }
 }
+
+private inline fun <reified T : Enum<T>> enumValueOrDefault(name: String, fallback: T): T =
+    runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
 
 private val MediaLayout.icon: ImageVector
     get() = when (this) {

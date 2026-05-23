@@ -247,6 +247,17 @@ private val enUsDictionary = mapOf(
     "设置已恢复默认值。" to "Settings have been reset to defaults.",
     "播放历史清除标记已写入；接入 Room 后会同步清理记录。" to "Playback history clear marker saved; records will be cleaned after Room integration.",
     "已清理当前缩略图内存缓存，并写入缓存清理标记。" to "Current thumbnail memory cache cleared and cache marker saved."
+    , "保存位置" to "Save locations",
+    "默认截图保存位置" to "Default screenshot folder",
+    "播放器截图会保存到这里" to "Player screenshots are saved here",
+    "默认文件下载位置" to "Default download folder",
+    "来源浏览和文件管理下载会保存到这里" to "Source-browser and file-manager downloads are saved here",
+    "选择文件夹" to "Choose folder",
+    "应用默认目录" to "App default folder",
+    "默认截图保存位置已更新" to "Default screenshot folder updated",
+    "默认文件下载位置已更新" to "Default download folder updated",
+    "截图保存位置已恢复为应用默认目录" to "Screenshot folder reset to the app default",
+    "文件下载位置已恢复为应用默认目录" to "Download folder reset to the app default"
 )
 
 private val enUsStrings = UiStrings(
