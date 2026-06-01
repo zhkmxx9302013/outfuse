@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -95,6 +96,7 @@ import com.outfuseplayer.ui.FileAction
 import com.outfuseplayer.ui.FileActionRequest
 import com.outfuseplayer.ui.MetadataMatchUiState
 import com.outfuseplayer.ui.screens.DetailScreen
+import com.outfuseplayer.ui.screens.DonateScreen
 import com.outfuseplayer.ui.screens.HomeScreen
 import com.outfuseplayer.ui.screens.HomeViewAllSection
 import com.outfuseplayer.ui.screens.homeSectionItems
@@ -134,7 +136,8 @@ private enum class RootDestination(
     LIBRARY(Icons.Outlined.VideoLibrary),
     SEARCH(Icons.Outlined.Search),
     SOURCES(Icons.Outlined.Storage),
-    SETTINGS(Icons.Outlined.Settings)
+    SETTINGS(Icons.Outlined.Settings),
+    DONATE(Icons.Outlined.FavoriteBorder)
 }
 
 private fun RootDestination.label(strings: UiStrings): String = when (this) {
@@ -143,6 +146,7 @@ private fun RootDestination.label(strings: UiStrings): String = when (this) {
     RootDestination.SEARCH -> strings.search
     RootDestination.SOURCES -> strings.sources
     RootDestination.SETTINGS -> strings.settings
+    RootDestination.DONATE -> if (strings.languageCode == "en-US") "Donate" else "打赏"
 }
 
 private val BundledDemoItemIds = setOf(
@@ -246,6 +250,7 @@ private fun OutfuseAppContent(
     var lastPlayedId by rememberSaveable { mutableStateOf(playbackPositionStore.lastPlayedItemId()) }
     var playQueue by remember { mutableStateOf<List<LibraryItem>>(emptyList()) }
     var startShuffle by remember { mutableStateOf(false) }
+    var returnToSourceBrowserOnPlayerClose by remember { mutableStateOf(false) }
     var userSeries by remember { mutableStateOf(userSeriesStore.load()) }
     var sourceScanState by remember { mutableStateOf<SourceScanUiState?>(null) }
     var metadataState by remember { mutableStateOf<MetadataMatchUiState?>(null) }
@@ -1087,11 +1092,13 @@ private fun OutfuseAppContent(
     val detailItem = libraryItems.firstOrNull { it.id == detailId }
     val playerItem = libraryItems.firstOrNull { it.id == playerId }
     val appBackgroundBrush = if (appSettings.darkTheme) AppBackgroundBrush else LightAppBackgroundBrush
+    val fileNameMode = enumValueOrDefault(appSettings.fileNameDisplayMode, FileNameDisplayMode.ELLIPSIS)
 
     fun showFileLocation(item: LibraryItem) {
         runtimePrefs.edit().putBoolean(RuntimeKeyPlayerActive, false).apply()
         lastPlayedId = item.id
         playerId = null
+        returnToSourceBrowserOnPlayerClose = false
         detailId = null
         homeBrowseSection = null
         sourceRevealItem = item
@@ -1103,15 +1110,25 @@ private fun OutfuseAppContent(
             runtimePrefs.edit().putBoolean(RuntimeKeyPlayerActive, true).apply()
         }
         fun closePlayer() {
+            val closingItem = playerItem
+            val shouldReturnToSourceBrowser = returnToSourceBrowserOnPlayerClose
             runtimePrefs.edit().putBoolean(RuntimeKeyPlayerActive, false).apply()
-            lastPlayedId = playerId
+            lastPlayedId = closingItem.id
             playerId = null
+            returnToSourceBrowserOnPlayerClose = false
+            if (shouldReturnToSourceBrowser) {
+                detailId = null
+                homeBrowseSection = null
+                sourceRevealItem = closingItem
+                root = RootDestination.SOURCES.name
+            }
         }
         if (playerItem.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE) {
             ImageViewerScreen(
                 item = playerItem,
                 playlist = playQueue.ifEmpty { libraryItems.filter { it.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE } },
                 series = userSeries,
+                slideshowIntervalSeconds = appSettings.imageSlideshowIntervalSeconds,
                 onAddToSeries = ::addToSeries,
                 onShowFileLocation = ::showFileLocation,
                 onBack = ::closePlayer
@@ -1130,6 +1147,7 @@ private fun OutfuseAppContent(
     }
 
     val onOpenDetail: (LibraryItem) -> Unit = { item ->
+        returnToSourceBrowserOnPlayerClose = false
         if (item.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE) {
             playQueue = libraryItems.filter { it.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE }
             startShuffle = false
@@ -1139,11 +1157,13 @@ private fun OutfuseAppContent(
         }
     }
     val onPlay: (LibraryItem) -> Unit = { item ->
+        returnToSourceBrowserOnPlayerClose = false
         playQueue = libraryItems.filter { it.streamUrl != null && it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
         startShuffle = false
         playerId = item.id
     }
     val onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit = { item, queue, shuffled ->
+        returnToSourceBrowserOnPlayerClose = false
         playQueue = queue
         startShuffle = shuffled
         playerId = item.id
@@ -1160,6 +1180,8 @@ private fun OutfuseAppContent(
         startShuffle = false
         detailId = null
         homeBrowseSection = null
+        sourceRevealItem = null
+        returnToSourceBrowserOnPlayerClose = true
         playerId = item.id
     }
     fun openRoot(destination: RootDestination) {
@@ -1167,6 +1189,7 @@ private fun OutfuseAppContent(
         detailId = null
         homeBrowseSection = null
         sourceRevealItem = null
+        returnToSourceBrowserOnPlayerClose = false
     }
 
     if (expanded) {
@@ -1192,6 +1215,7 @@ private fun OutfuseAppContent(
                     sourceRevealItem = sourceRevealItem,
                     homeBrowseSection = homeBrowseSection,
                     appSettings = appSettings,
+                    fileNameMode = fileNameMode,
                     startupDataRestored = startupDataRestored,
                     expanded = true,
                     onOpenSources = { openRoot(RootDestination.SOURCES) },
@@ -1274,6 +1298,7 @@ private fun OutfuseAppContent(
                     sourceRevealItem = sourceRevealItem,
                     homeBrowseSection = homeBrowseSection,
                     appSettings = appSettings,
+                    fileNameMode = fileNameMode,
                     startupDataRestored = startupDataRestored,
                     expanded = false,
                     onOpenSources = { openRoot(RootDestination.SOURCES) },
@@ -1339,6 +1364,7 @@ private fun AppContent(
     sourceRevealItem: LibraryItem?,
     homeBrowseSection: HomeViewAllSection?,
     appSettings: AppSettings,
+    fileNameMode: FileNameDisplayMode,
     startupDataRestored: Boolean,
     expanded: Boolean,
     onOpenSources: () -> Unit,
@@ -1388,6 +1414,7 @@ private fun AppContent(
                     series = userSeries,
                     mediaSources = mediaSources,
                     metadataState = metadataState,
+                    fileNameMode = fileNameMode,
                     expanded = expanded,
                     onBack = onCloseHomeViewAll,
                     onItemClick = onOpenDetail,
@@ -1431,19 +1458,20 @@ private fun AppContent(
                 ?: playable.firstOrNull()
                 ?: libraryItems.first()
             HomeScreen(
-            featured = featuredItem,
-            allItems = libraryItems,
-            sources = mediaSources,
-            series = userSeries,
-            continueWatching = libraryItems.homeSectionPreview(HomeViewAllSection.CONTINUE_WATCHING),
-            recent = libraryItems.homeSectionPreview(HomeViewAllSection.RECENT),
-            movies = libraryItems.homeSectionPreview(HomeViewAllSection.MOVIES),
-            shows = libraryItems.homeSectionPreview(HomeViewAllSection.SHOWS),
-            expanded = expanded,
-            onItemClick = onOpenDetail,
-            onPlay = onPlay,
-            onViewAll = onHomeViewAll
-        )
+                featured = featuredItem,
+                allItems = libraryItems,
+                sources = mediaSources,
+                series = userSeries,
+                continueWatching = libraryItems.homeSectionPreview(HomeViewAllSection.CONTINUE_WATCHING),
+                recent = libraryItems.homeSectionPreview(HomeViewAllSection.RECENT),
+                movies = libraryItems.homeSectionPreview(HomeViewAllSection.MOVIES),
+                shows = libraryItems.homeSectionPreview(HomeViewAllSection.SHOWS),
+                expanded = expanded,
+                fileNameMode = fileNameMode,
+                onItemClick = onOpenDetail,
+                onPlay = onPlay,
+                onViewAll = onHomeViewAll
+            )
         }
 
         RootDestination.LIBRARY -> LibraryScreen(
@@ -1452,6 +1480,7 @@ private fun AppContent(
             mediaSources = mediaSources,
             metadataState = metadataState,
             expanded = expanded,
+            fileNameMode = fileNameMode,
             onItemClick = onOpenDetail,
             onPlayQueue = onPlayQueue,
             onRefreshLibrary = onRefreshLibrary,
@@ -1471,6 +1500,7 @@ private fun AppContent(
             expanded = expanded,
             scanState = sourceScanState,
             revealItem = sourceRevealItem,
+            fileNameMode = fileNameMode,
             onRevealHandled = onSourceRevealHandled,
             onSourceAdded = onSourceAdded,
             onSourceDeleted = onSourceDeleted,
@@ -1486,6 +1516,10 @@ private fun AppContent(
             settings = appSettings,
             onSettingsChange = onSettingsChange
         )
+
+        RootDestination.DONATE -> DonateScreen(
+            expanded = expanded
+        )
     }
 }
 
@@ -1496,6 +1530,7 @@ private fun HomeViewAllRoute(
     series: List<UserSeries>,
     mediaSources: List<com.outfuseplayer.model.MediaSource>,
     metadataState: MetadataMatchUiState?,
+    fileNameMode: FileNameDisplayMode,
     expanded: Boolean,
     onBack: () -> Unit,
     onItemClick: (LibraryItem) -> Unit,
@@ -1535,6 +1570,7 @@ private fun HomeViewAllRoute(
             title = section.title,
             subtitle = "首页集合 · 可排序、筛选、随机播放",
             itemsStableForBackgroundRead = true,
+            fileNameMode = fileNameMode,
             onBack = onBack,
             onItemClick = onItemClick,
             onPlayQueue = onPlayQueue,

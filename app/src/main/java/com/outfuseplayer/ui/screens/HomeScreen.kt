@@ -52,7 +52,9 @@ import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.SourceHealth
+import com.outfuseplayer.ui.FileNameDisplayMode
 import com.outfuseplayer.ui.components.BackdropImage
+import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
 import com.outfuseplayer.ui.components.MediaRail
 import com.outfuseplayer.ui.components.PrimaryPlayButton
@@ -158,6 +160,7 @@ fun HomeScreen(
     movies: List<LibraryItem>,
     shows: List<LibraryItem>,
     expanded: Boolean,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onItemClick: (LibraryItem) -> Unit,
     onPlay: (LibraryItem) -> Unit,
     onViewAll: (HomeViewAllSection) -> Unit
@@ -225,6 +228,7 @@ fun HomeScreen(
             HeroSection(
                 item = featured,
                 expanded = expanded,
+                fileNameMode = fileNameMode,
                 onOpen = { onItemClick(featured) },
                 onPlay = { onPlay(featured) }
             )
@@ -239,6 +243,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 148.dp else 126.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.CONTINUE_WATCHING) }
             )
@@ -250,6 +255,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.PLAYED) }
             )
@@ -261,6 +267,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.UNPLAYED) }
             )
@@ -272,6 +279,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.RECENT) }
             )
@@ -283,6 +291,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.ALL) }
             )
@@ -294,6 +303,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.MOVIES) }
             )
@@ -305,6 +315,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.SHOWS) }
             )
@@ -316,6 +327,7 @@ fun HomeScreen(
                 onItemClick = onItemClick,
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
+                fileNameMode = fileNameMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.SERIES) }
             )
@@ -401,6 +413,7 @@ private fun SectionEditStrip(
 private fun HeroSection(
     item: LibraryItem,
     expanded: Boolean,
+    fileNameMode: FileNameDisplayMode,
     onOpen: () -> Unit,
     onPlay: () -> Unit
 ) {
@@ -434,12 +447,13 @@ private fun HeroSection(
                     .widthIn(max = if (expanded) 560.dp else 330.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
+                FileNameText(
                     text = item.title,
+                    mode = fileNameMode,
                     style = if (expanded) MaterialTheme.typography.displaySmall else MaterialTheme.typography.headlineMedium,
                     color = Color.White,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    foldedLines = 2,
+                    expandedLines = 3
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

@@ -74,9 +74,11 @@ import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.ui.FileAction
 import com.outfuseplayer.ui.FileActionRequest
+import com.outfuseplayer.ui.FileNameDisplayMode
 import com.outfuseplayer.ui.MediaLayout
 import com.outfuseplayer.ui.MediaSort
 import com.outfuseplayer.ui.MetadataMatchUiState
+import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
 import com.outfuseplayer.ui.components.PosterCard
 import com.outfuseplayer.ui.components.PosterImage
@@ -132,6 +134,7 @@ fun LibraryScreen(
     collectionSection: HomeViewAllSection? = null,
     collectionSeriesIds: Set<String> = emptySet(),
     itemsStableForBackgroundRead: Boolean = false,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onBack: (() -> Unit)? = null,
     onItemClick: (LibraryItem) -> Unit,
     onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit,
@@ -316,6 +319,7 @@ fun LibraryScreen(
                 selectionMode = selectionMode,
                 selectedIds = selectedIdSet,
                 listState = listState,
+                fileNameMode = fileNameMode,
                 onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                 onActionClick = { actionTarget = it },
                 modifier = Modifier.fillMaxSize()
@@ -330,6 +334,7 @@ fun LibraryScreen(
                     gridState = gridState,
                     selectionMode = selectionMode,
                     selectedIds = selectedIdSet,
+                    fileNameMode = fileNameMode,
                     onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                     onActionClick = { actionTarget = it },
                     modifier = Modifier.weight(1f)
@@ -351,6 +356,7 @@ fun LibraryScreen(
                 gridState = gridState,
                 selectionMode = selectionMode,
                 selectedIds = selectedIdSet,
+                fileNameMode = fileNameMode,
                 onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                 onActionClick = { actionTarget = it },
                 modifier = Modifier.fillMaxSize()
@@ -761,6 +767,7 @@ private fun LibraryGrid(
     gridState: LazyGridState,
     selectionMode: Boolean,
     selectedIds: Set<String>,
+    fileNameMode: FileNameDisplayMode,
     onItemClick: (LibraryItem) -> Unit,
     onActionClick: (LibraryItem) -> Unit,
     modifier: Modifier = Modifier
@@ -792,6 +799,7 @@ private fun LibraryGrid(
                     onClick = { onItemClick(item) },
                     width = if (layout == MediaLayout.LARGE) 152.dp else 112.dp,
                     modifier = Modifier.fillMaxWidth(),
+                    fileNameMode = fileNameMode,
                     seriesLabels = series.labelsFor(item)
                 )
                 if (selectionMode) {
@@ -822,6 +830,7 @@ private fun LibraryList(
     selectionMode: Boolean,
     selectedIds: Set<String>,
     listState: LazyListState,
+    fileNameMode: FileNameDisplayMode,
     onItemClick: (LibraryItem) -> Unit,
     onActionClick: (LibraryItem) -> Unit,
     modifier: Modifier = Modifier
@@ -843,6 +852,7 @@ private fun LibraryList(
                 seriesLabels = series.labelsFor(item),
                 selectionMode = selectionMode,
                 selected = item.id in selectedIds,
+                fileNameMode = fileNameMode,
                 onClick = { onItemClick(item) },
                 onActionClick = { onActionClick(item) }
             )
@@ -856,6 +866,7 @@ private fun LibraryListRow(
     seriesLabels: List<String>,
     selectionMode: Boolean,
     selected: Boolean,
+    fileNameMode: FileNameDisplayMode,
     onClick: () -> Unit,
     onActionClick: () -> Unit
 ) {
@@ -889,7 +900,14 @@ private fun LibraryListRow(
                 SeriesBadge(seriesLabels, modifier = Modifier.align(Alignment.TopStart))
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(item.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                FileNameText(
+                    text = item.title,
+                    mode = fileNameMode,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    foldedLines = 1,
+                    expandedLines = 3
+                )
                 Text(
                     text = listOfNotNull(item.originalTitle, item.sourceName, item.year?.toString()).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,

@@ -67,6 +67,8 @@ import com.outfuseplayer.data.AppSettings
 import com.outfuseplayer.data.MediaOutputRepository
 import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.data.ThumbnailRepository
+import com.outfuseplayer.ui.FileNameDisplayMode
+import com.outfuseplayer.ui.enumValueOrDefault
 import com.outfuseplayer.ui.i18n.LanguageChoice
 import com.outfuseplayer.ui.i18n.LocalUiStrings
 import com.outfuseplayer.ui.i18n.stringsForLanguage
@@ -202,6 +204,19 @@ fun SettingsScreen(
                         )
                     }
                 )
+                OptionSetting(
+                    title = "文件名显示",
+                    subtitle = "影响首页、媒体库和来源浏览里的文件名",
+                    options = FileNameDisplayMode.entries.map { it.label },
+                    selected = enumValueOrDefault(currentSettings.fileNameDisplayMode, FileNameDisplayMode.ELLIPSIS).label,
+                    onSelected = { label ->
+                        val mode = FileNameDisplayMode.entries.firstOrNull { it.label == label } ?: FileNameDisplayMode.ELLIPSIS
+                        update(
+                            currentSettings.copy(fileNameDisplayMode = mode.name),
+                            "文件名显示已设为${mode.label}"
+                        )
+                    }
+                )
             }
         }
         item {
@@ -227,6 +242,19 @@ fun SettingsScreen(
                     title = "记忆播放位置",
                     checked = currentSettings.rememberPlayback,
                     onCheckedChange = { update(currentSettings.copy(rememberPlayback = it), if (it) "会保存播放进度" else "不会保存播放进度") }
+                )
+                OptionSetting(
+                    title = "图片幻灯片间隔",
+                    subtitle = "控制图片查看器自动切换下一张的等待时间",
+                    options = listOf("2 秒", "4 秒", "6 秒", "8 秒", "12 秒", "20 秒"),
+                    selected = "${currentSettings.imageSlideshowIntervalSeconds.coerceIn(1, 60)} 秒",
+                    onSelected = { label ->
+                        val seconds = label.substringBefore(" ").toIntOrNull() ?: 4
+                        update(
+                            currentSettings.copy(imageSlideshowIntervalSeconds = seconds),
+                            "图片幻灯片间隔已设为 $seconds 秒"
+                        )
+                    }
                 )
             }
         }

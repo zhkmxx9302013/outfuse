@@ -1,5 +1,33 @@
 ﻿# Changelog
 
+## 0.2 - 2026-06-01
+
+### 中文说明
+
+- 版本号升级到 `0.2`，Release APK 命名为 `outfuse-0.2-release.apk`。
+- 在设置后新增“打赏”标签页，内置支付宝收款二维码，并支持尝试拉起支付宝扫一扫。
+- 将文件名显示方式移动到全局设置，支持省略、多行和单行轮播，并统一影响首页、媒体库和来源浏览。
+- 图片查看器新增幻灯片播放能力，支持顺序或随机播放，并可在设置中调整自动切换间隔。
+- 优化图片浏览左右切换动画、缩放动效和图片列表显示逻辑。
+- 优化来源浏览体验，支持按来源目录记忆排序、筛选、布局和当前位置。
+- 修复从 SMB 等来源目录直接播放后返回位置不正确的问题，退出播放后会回到播放前的文件夹。
+- 优化来源浏览的大图模式信息排布，将更多操作入口放到文件类型与大小信息同行。
+- 补充首页、媒体库和来源浏览的文件名显示组件，减少长文件名在不同布局中的溢出与遮挡。
+- 同步 Jellyfin / Emby 客户端版本标识到 `0.2`。
+
+### English Notes
+
+- Bumped the app version to `0.2` and updated the release APK name to `outfuse-0.2-release.apk`.
+- Added a Donate tab after Settings with the bundled Alipay transfer QR code and an action that attempts to open Alipay scan.
+- Moved file-name display mode into global Settings, with ellipsis, multiline, and marquee modes shared by Home, Library, and Sources.
+- Added image slideshow playback with sequential or shuffle modes plus a configurable slide interval in Settings.
+- Improved image-viewer page transitions, zoom feel, and image-strip visibility behavior.
+- Improved source browsing by remembering per-source sort, filter, layout, and current folder state.
+- Fixed return navigation after opening media directly from source folders, including SMB source browsing.
+- Refined large-card source-browser layout by moving the more-actions button beside file type and size information.
+- Added a shared file-name text component across Home, Library, and source browsing to reduce overflow in long filenames.
+- Updated the Jellyfin / Emby media-server client version marker to `0.2`.
+
 ## 0.1.1 - 2026-05-23
 
 ### 中文说明

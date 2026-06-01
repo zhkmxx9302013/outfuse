@@ -21,6 +21,23 @@ enum class MediaLayout(val label: String) {
     SMALL("小图")
 }
 
+enum class MediaEntryFilter(val label: String) {
+    ALL("全部"),
+    FOLDERS("文件夹"),
+    VIDEOS("视频"),
+    IMAGES("图片"),
+    FILES("文件")
+}
+
+enum class FileNameDisplayMode(val label: String) {
+    ELLIPSIS("省略"),
+    MULTILINE("多行"),
+    MARQUEE("轮播")
+}
+
+inline fun <reified T : Enum<T>> enumValueOrDefault(name: String, fallback: T): T =
+    runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
+
 fun LibraryItem.isImageMedia(): Boolean = itemType == LibraryItemType.IMAGE
 
 fun LibraryItem.isVideoMedia(): Boolean =
@@ -63,6 +80,24 @@ fun List<RemoteEntry>.sortedRemoteEntriesFor(sort: MediaSort, ascending: Boolean
         MediaSort.SOURCE -> sortedWith(remoteEntryBaseComparator.then(orderBy<RemoteEntry, String>(ascending) { it.path.lowercase(Locale.US) }))
     }
 }
+
+fun List<SmbEntry>.filterEntriesFor(filter: MediaEntryFilter): List<SmbEntry> =
+    when (filter) {
+        MediaEntryFilter.ALL -> this
+        MediaEntryFilter.FOLDERS -> filter { it.isDirectory }
+        MediaEntryFilter.VIDEOS -> filter { !it.isDirectory && it.isVideo }
+        MediaEntryFilter.IMAGES -> filter { !it.isDirectory && it.isImage }
+        MediaEntryFilter.FILES -> filter { !it.isDirectory }
+    }
+
+fun List<RemoteEntry>.filterRemoteEntriesFor(filter: MediaEntryFilter): List<RemoteEntry> =
+    when (filter) {
+        MediaEntryFilter.ALL -> this
+        MediaEntryFilter.FOLDERS -> filter { it.isDirectory }
+        MediaEntryFilter.VIDEOS -> filter { !it.isDirectory && (it.name.isVideoFileName() || it.mimeType?.startsWith("video/", ignoreCase = true) == true) }
+        MediaEntryFilter.IMAGES -> filter { !it.isDirectory && (it.name.isImageFileName() || it.mimeType?.startsWith("image/", ignoreCase = true) == true) }
+        MediaEntryFilter.FILES -> filter { !it.isDirectory }
+    }
 
 private fun LibraryItem.dateSortKey(): Long =
     modifiedAt.takeIf { it > 0L } ?: ((year ?: 0) * 10_000L)

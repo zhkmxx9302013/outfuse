@@ -9,6 +9,7 @@ import android.widget.ImageView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -40,6 +41,9 @@ import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material3.Icon
@@ -77,13 +81,16 @@ import com.outfuseplayer.ui.components.FilePreviewThumb
 import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
+import kotlinx.coroutines.delay
 import java.nio.ByteBuffer
+import kotlin.random.Random
 
 @Composable
 fun ImageViewerScreen(
     item: LibraryItem,
     playlist: List<LibraryItem> = listOf(item),
     series: List<UserSeries> = emptyList(),
+    slideshowIntervalSeconds: Int = 4,
     onAddToSeries: (LibraryItem, String) -> Unit = { _, _ -> },
     onShowFileLocation: (LibraryItem) -> Unit = {},
     onBack: () -> Unit
@@ -104,6 +111,8 @@ fun ImageViewerScreen(
     var offsetY by remember(currentIndex) { mutableStateOf(0f) }
     var stripVisible by remember { mutableStateOf(false) }
     var moreVisible by remember { mutableStateOf(false) }
+    var slideshowPlaying by remember { mutableStateOf(false) }
+    var slideshowShuffle by remember { mutableStateOf(false) }
     val currentItem = imageItems.getOrNull(currentIndex) ?: item
     var imageBytes by remember(currentItem.id) { mutableStateOf<ByteArray?>(null) }
     var decodedBitmap by remember(currentItem.id) { mutableStateOf<Bitmap?>(null) }
@@ -118,13 +127,31 @@ fun ImageViewerScreen(
         currentIndex = targetIndex
     }
 
+    fun nextSlideshowIndex(): Int {
+        if (imageItems.size <= 1) return currentIndex
+        if (!slideshowShuffle) return if (currentIndex >= imageItems.lastIndex) 0 else currentIndex + 1
+        var next = currentIndex
+        repeat(4) {
+            if (next == currentIndex) next = Random.nextInt(imageItems.size)
+        }
+        return if (next == currentIndex) (currentIndex + 1) % imageItems.size else next
+    }
+
     LaunchedEffect(currentIndex, pageSwitchDirection) {
         if (pageSwitchDirection != 0) {
             pageSlide.snapTo(pageSwitchDirection.toFloat())
             pageSlide.animateTo(
                 targetValue = 0f,
-                animationSpec = tween(durationMillis = 260)
+                animationSpec = tween(durationMillis = 330, easing = FastOutSlowInEasing)
             )
+        }
+    }
+
+    LaunchedEffect(slideshowPlaying, slideshowShuffle, currentIndex, imageItems.size, slideshowIntervalSeconds) {
+        if (slideshowPlaying && imageItems.size > 1) {
+            stripVisible = false
+            delay(slideshowIntervalSeconds.coerceIn(1, 60) * 1000L)
+            selectIndex(nextSlideshowIndex())
         }
     }
 
@@ -250,14 +277,21 @@ fun ImageViewerScreen(
             label = "imageOffsetY"
         )
         val pageSlideProgress = pageSlide.value
+        val pageTravel = kotlin.math.abs(pageSlideProgress).coerceIn(0f, 1f)
         val imageModifier = Modifier
             .fillMaxSize()
             .graphicsLayer {
-                scaleX = animatedScale
-                scaleY = animatedScale
-                translationX = animatedOffsetX + pageSlideProgress * size.width
+                val pageScale = 1f - pageTravel * 0.035f
+                val dragTravel = if (size.width > 0f && animatedScale <= 1.05f) {
+                    kotlin.math.abs(dragPixels / size.width).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                scaleX = animatedScale * pageScale
+                scaleY = animatedScale * pageScale
+                translationX = animatedOffsetX + pageSlideProgress * size.width + dragPixels
                 translationY = animatedOffsetY
-                alpha = 1f - (kotlin.math.abs(pageSlideProgress) * 0.12f)
+                alpha = 1f - maxOf(pageTravel * 0.18f, dragTravel * 0.12f)
             }
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && bytes != null -> {
@@ -330,6 +364,22 @@ fun ImageViewerScreen(
                 }
             }
             Row {
+                if (imageItems.size > 1) {
+                    IconButton(onClick = { slideshowPlaying = !slideshowPlaying }) {
+                        Icon(
+                            if (slideshowPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                            contentDescription = if (slideshowPlaying) "暂停幻灯片" else "播放幻灯片",
+                            tint = Color.White
+                        )
+                    }
+                    IconButton(onClick = { slideshowShuffle = !slideshowShuffle }) {
+                        Icon(
+                            Icons.Outlined.Shuffle,
+                            contentDescription = if (slideshowShuffle) "随机播放图片" else "顺序播放图片",
+                            tint = if (slideshowShuffle) PrimaryOrange else Color.White
+                        )
+                    }
+                }
                 IconButton(onClick = { moreVisible = !moreVisible }) {
                     Icon(Icons.Outlined.MoreVert, contentDescription = "更多", tint = Color.White)
                 }

@@ -61,6 +61,7 @@ import com.outfuseplayer.data.ThumbnailRepository
 import com.outfuseplayer.data.UserSeries
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
+import com.outfuseplayer.ui.FileNameDisplayMode
 import com.outfuseplayer.ui.theme.ElectricBlue
 import com.outfuseplayer.ui.theme.PrimaryAmber
 import com.outfuseplayer.ui.theme.PrimaryOrange
@@ -108,6 +109,7 @@ fun MediaRail(
     modifier: Modifier = Modifier,
     posterWidth: Dp = 116.dp,
     series: List<UserSeries> = emptyList(),
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     action: String? = null,
     onActionClick: (() -> Unit)? = null
 ) {
@@ -122,6 +124,7 @@ fun MediaRail(
                     item = item,
                     onClick = { onItemClick(item) },
                     width = posterWidth,
+                    fileNameMode = fileNameMode,
                     seriesLabels = series.labelsFor(item)
                 )
             }
@@ -136,6 +139,7 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     width: Dp = 120.dp,
     showProgress: Boolean = true,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     seriesLabels: List<String> = emptyList()
 ) {
     Column(
@@ -177,12 +181,13 @@ fun PosterCard(
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
-        Text(
+        FileNameText(
             text = item.title,
+            mode = fileNameMode,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onBackground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            foldedLines = 1,
+            expandedLines = 3
         )
         Text(
             text = item.year?.toString() ?: item.durationLabel,

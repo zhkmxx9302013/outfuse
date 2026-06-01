@@ -80,6 +80,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -106,6 +107,8 @@ import com.outfuseplayer.data.smb.toReadableSize
 import com.outfuseplayer.data.LocalMediaRepository
 import com.outfuseplayer.data.MediaOutputRepository
 import com.outfuseplayer.data.SettingsStore
+import com.outfuseplayer.data.SourceBrowserViewState
+import com.outfuseplayer.data.SourceBrowserViewStateStore
 import com.outfuseplayer.data.discovery.DiscoveredService
 import com.outfuseplayer.data.discovery.NetworkDiscoveryRepository
 import com.outfuseplayer.data.remote.CloudDriveRepository
@@ -124,9 +127,16 @@ import com.outfuseplayer.model.RemoteEntry
 import com.outfuseplayer.model.SourceHealth
 import com.outfuseplayer.model.SourceType
 import com.outfuseplayer.ui.FileAction
+import com.outfuseplayer.ui.FileNameDisplayMode
+import com.outfuseplayer.ui.MediaEntryFilter
 import com.outfuseplayer.ui.MediaLayout
 import com.outfuseplayer.ui.MediaSort
+import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
+import com.outfuseplayer.ui.enumValueOrDefault
+import com.outfuseplayer.ui.filterEntriesFor
+import com.outfuseplayer.ui.filterRemoteEntriesFor
+import com.outfuseplayer.ui.sortedEntriesFor
 import com.outfuseplayer.ui.sortedRemoteEntriesFor
 import com.outfuseplayer.ui.theme.Danger
 import com.outfuseplayer.ui.theme.ElectricBlue
@@ -159,13 +169,41 @@ data class SourceScanUiState(
     val message: String
 )
 
-private enum class SourceBrowserFilter(val label: String) {
-    ALL("全部"),
-    FOLDERS("文件夹"),
-    VIDEOS("视频"),
-    IMAGES("图片"),
-    FILES("文件")
-}
+private val NullableSmbConfigSaver = listSaver<SmbConfig?, Any>(
+    save = { config ->
+        if (config == null) {
+            listOf("0")
+        } else {
+            listOf(
+                "1",
+                config.name,
+                config.server,
+                config.share,
+                config.path,
+                config.domain,
+                config.username,
+                config.password,
+                config.port
+            )
+        }
+    },
+    restore = { values ->
+        if (values.firstOrNull()?.toString() != "1") {
+            null
+        } else {
+            SmbConfig(
+                name = values.getOrNull(1)?.toString().orEmpty(),
+                server = values.getOrNull(2)?.toString().orEmpty(),
+                share = values.getOrNull(3)?.toString().orEmpty(),
+                path = values.getOrNull(4)?.toString().orEmpty(),
+                domain = values.getOrNull(5)?.toString().orEmpty(),
+                username = values.getOrNull(6)?.toString().orEmpty(),
+                password = values.getOrNull(7)?.toString().orEmpty(),
+                port = (values.getOrNull(8) as? Int) ?: values.getOrNull(8)?.toString()?.toIntOrNull() ?: 445
+            )
+        }
+    }
+)
 
 @Composable
 fun SourceScreen(
@@ -173,6 +211,7 @@ fun SourceScreen(
     expanded: Boolean,
     scanState: SourceScanUiState? = null,
     revealItem: LibraryItem? = null,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onRevealHandled: () -> Unit = {},
     onSourceAdded: (MediaSource) -> Unit,
     onSourceDeleted: (String) -> Unit = {},
@@ -195,13 +234,13 @@ fun SourceScreen(
     val hasSavedConfig = remember { store.hasSaved() }
     val initialConfig = remember { store.loadLast() }
     val emptyConfig = remember { SmbConfig(name = "", server = "", share = "") }
-    var browserConfig by remember { mutableStateOf<SmbConfig?>(null) }
+    var browserConfig by rememberSaveable(stateSaver = NullableSmbConfigSaver) { mutableStateOf<SmbConfig?>(null) }
     var remoteBrowserConfig by remember { mutableStateOf<RemoteSourceConfig?>(null) }
     var smbHighlightPath by remember { mutableStateOf<String?>(null) }
     var remoteHighlightPath by remember { mutableStateOf<String?>(null) }
     var localHighlightPath by remember { mutableStateOf<String?>(null) }
     var localInitialDocumentId by remember { mutableStateOf<String?>(null) }
-    var browserPublishSource by remember { mutableStateOf(true) }
+    var browserPublishSource by rememberSaveable { mutableStateOf(true) }
     var editConfig by remember { mutableStateOf<SmbConfig?>(null) }
     var editRemoteConfig by remember { mutableStateOf<RemoteSourceConfig?>(null) }
     var editLocalSource by remember { mutableStateOf<MediaSource?>(null) }
@@ -481,6 +520,7 @@ fun SourceScreen(
             expanded = expanded,
             publishSourceStatus = browserPublishSource,
             highlightPath = smbHighlightPath,
+            fileNameMode = fileNameMode,
             onBack = { browserConfig = null },
             onSourceAdded = onSourceAdded,
             onMediaDiscovered = onMediaDiscovered,
@@ -498,6 +538,7 @@ fun SourceScreen(
                 cloudDriveRepository = cloudDriveRepository,
             expanded = expanded,
             highlightPath = remoteHighlightPath,
+            fileNameMode = fileNameMode,
             onBack = { remoteBrowserConfig = null },
             onMediaDiscovered = onMediaDiscovered,
             onMediaRemoved = onMediaRemoved,
@@ -512,6 +553,7 @@ fun SourceScreen(
             initialDocumentId = localInitialDocumentId,
             highlightPath = localHighlightPath,
             expanded = expanded,
+            fileNameMode = fileNameMode,
             onBack = {
                 localBrowserSource = null
                 localInitialDocumentId = null
@@ -611,6 +653,7 @@ fun SourceScreen(
                                 browserConfig = it
                             },
                             contentScrollable = true,
+                            fileNameMode = fileNameMode,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
@@ -664,6 +707,7 @@ fun SourceScreen(
                         browserConfig = it
                     },
                     contentScrollable = false,
+                    fileNameMode = fileNameMode,
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
@@ -783,6 +827,7 @@ private fun RemoteBrowserScreen(
     cloudDriveRepository: CloudDriveRepository,
     expanded: Boolean,
     highlightPath: String? = null,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onBack: () -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
     onMediaRemoved: (String, List<String>) -> Unit,
@@ -792,20 +837,36 @@ private fun RemoteBrowserScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val rootPath = remember(initialConfig.sourceId, initialConfig.path) { initialConfig.path.trim('/') }
-    var currentConfig by remember(initialConfig.sourceId, rootPath) { mutableStateOf(initialConfig.copy(path = rootPath)) }
+    val viewStateStore = remember { SourceBrowserViewStateStore(context) }
+    val savedViewState = remember(initialConfig.sourceId, rootPath, highlightPath) {
+        val persisted = viewStateStore.load(
+            sourceId = initialConfig.sourceId,
+            defaultSortName = MediaSort.NAME.name,
+            defaultSortAscending = true,
+            defaultLayoutName = MediaLayout.LIST.name,
+            defaultFilterName = MediaEntryFilter.ALL.name,
+            defaultPath = rootPath
+        )
+        if (highlightPath != null) {
+            persisted.copy(currentPath = rootPath)
+        } else {
+            persisted.copy(currentPath = persisted.currentPath.ifBlank { rootPath })
+        }
+    }
+    var currentConfig by remember(initialConfig.sourceId, rootPath, highlightPath) { mutableStateOf(initialConfig.copy(path = savedViewState.currentPath.trim('/'))) }
     var entries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("正在打开远程目录...") }
-    var sortName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaSort.NAME.name) }
-    var sortAscending by rememberSaveable(initialConfig.sourceId) { mutableStateOf(true) }
-    var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaLayout.LIST.name) }
-    var filterName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(SourceBrowserFilter.ALL.name) }
+    var sortName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.sortName) }
+    var sortAscending by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.sortAscending) }
+    var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.layoutName) }
+    var filterName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.filterName) }
     var actionEntry by remember { mutableStateOf<RemoteEntry?>(null) }
-    val sort = MediaSort.valueOf(sortName)
-    val layout = MediaLayout.valueOf(layoutName)
-    val filter = SourceBrowserFilter.valueOf(filterName)
+    val sort = enumValueOrDefault(sortName, MediaSort.NAME)
+    val layout = enumValueOrDefault(layoutName, MediaLayout.LIST)
+    val filter = enumValueOrDefault(filterName, MediaEntryFilter.ALL)
     val visibleEntries = entries
-        .filterForSourceBrowser(filter)
+        .filterRemoteEntriesFor(filter)
         .sortedRemoteEntriesFor(sort, sortAscending)
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
@@ -841,6 +902,19 @@ private fun RemoteBrowserScreen(
 
     LaunchedEffect(currentConfig.sourceId, currentConfig.path, currentConfig.token, currentConfig.userId) {
         loadRemotePath(currentConfig)
+    }
+
+    LaunchedEffect(currentConfig.sourceId, currentConfig.path, sortName, sortAscending, layoutName, filterName) {
+        viewStateStore.save(
+            currentConfig.sourceId,
+            SourceBrowserViewState(
+                sortName = sortName,
+                sortAscending = sortAscending,
+                layoutName = layoutName,
+                filterName = filterName,
+                currentPath = currentConfig.path
+            )
+        )
     }
 
     LaunchedEffect(visibleEntries, highlightPath, layout) {
@@ -953,6 +1027,7 @@ private fun RemoteBrowserScreen(
                     entries = visibleEntries,
                     layout = layout,
                     highlightPath = highlightPath,
+                    fileNameMode = fileNameMode,
                     itemFactory = { currentConfig.toLibraryItem(it) },
                     actionEnabled = true,
                     actionUnsupportedMessage = if (currentConfig.type == SourceType.WEBDAV) null else "${currentConfig.type.remoteTypeLabel()} 不支持服务端文件删除、移动或重命名。",
@@ -1018,6 +1093,7 @@ private fun LocalBrowserScreen(
     initialDocumentId: String?,
     highlightPath: String?,
     expanded: Boolean,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onBack: () -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
     onMediaRemoved: (String, List<String>) -> Unit,
@@ -1059,23 +1135,40 @@ private fun LocalBrowserScreen(
     }
 
     val startDocumentId = initialDocumentId?.takeIf { it.isNotBlank() } ?: rootDocumentId
-    var documentStack by remember(source.id, rootDocumentId, startDocumentId) {
-        mutableStateOf(if (startDocumentId == rootDocumentId) listOf(rootDocumentId) else listOf(rootDocumentId, startDocumentId))
+    val viewStateStore = remember { SourceBrowserViewStateStore(context) }
+    val savedViewState = remember(source.id, startDocumentId, highlightPath) {
+        val persisted = viewStateStore.load(
+            sourceId = source.id,
+            defaultSortName = MediaSort.NAME.name,
+            defaultSortAscending = true,
+            defaultLayoutName = MediaLayout.LIST.name,
+            defaultFilterName = MediaEntryFilter.ALL.name,
+            defaultPath = startDocumentId
+        )
+        if (highlightPath != null) {
+            persisted.copy(currentPath = startDocumentId)
+        } else {
+            persisted.copy(currentPath = persisted.currentPath.ifBlank { startDocumentId })
+        }
+    }
+    val initialCurrentDocumentId = savedViewState.currentPath.ifBlank { startDocumentId }
+    var documentStack by remember(source.id, rootDocumentId, initialCurrentDocumentId) {
+        mutableStateOf(documentStackFor(rootDocumentId, initialCurrentDocumentId))
     }
     val currentDocumentId = documentStack.lastOrNull().orEmpty()
     var entries by remember(source.id) { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("正在打开本机目录...") }
-    var sortName by rememberSaveable(source.id) { mutableStateOf(MediaSort.NAME.name) }
-    var sortAscending by rememberSaveable(source.id) { mutableStateOf(true) }
-    var layoutName by rememberSaveable(source.id) { mutableStateOf(MediaLayout.LIST.name) }
-    var filterName by rememberSaveable(source.id) { mutableStateOf(SourceBrowserFilter.ALL.name) }
+    var sortName by rememberSaveable(source.id) { mutableStateOf(savedViewState.sortName) }
+    var sortAscending by rememberSaveable(source.id) { mutableStateOf(savedViewState.sortAscending) }
+    var layoutName by rememberSaveable(source.id) { mutableStateOf(savedViewState.layoutName) }
+    var filterName by rememberSaveable(source.id) { mutableStateOf(savedViewState.filterName) }
     var actionEntry by remember { mutableStateOf<RemoteEntry?>(null) }
-    val sort = MediaSort.valueOf(sortName)
-    val layout = MediaLayout.valueOf(layoutName)
-    val filter = SourceBrowserFilter.valueOf(filterName)
+    val sort = enumValueOrDefault(sortName, MediaSort.NAME)
+    val layout = enumValueOrDefault(layoutName, MediaLayout.LIST)
+    val filter = enumValueOrDefault(filterName, MediaEntryFilter.ALL)
     val visibleEntries = entries
-        .filterForSourceBrowser(filter)
+        .filterRemoteEntriesFor(filter)
         .sortedRemoteEntriesFor(sort, sortAscending)
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
@@ -1102,6 +1195,19 @@ private fun LocalBrowserScreen(
             onFailure = { "打开目录失败：${it.message ?: "请确认文件夹授权仍然有效"}" }
         )
         busy = false
+    }
+
+    LaunchedEffect(source.id, currentDocumentId, sortName, sortAscending, layoutName, filterName) {
+        viewStateStore.save(
+            source.id,
+            SourceBrowserViewState(
+                sortName = sortName,
+                sortAscending = sortAscending,
+                layoutName = layoutName,
+                filterName = filterName,
+                currentPath = currentDocumentId
+            )
+        )
     }
 
     LaunchedEffect(visibleEntries, highlightPath, layout) {
@@ -1212,6 +1318,7 @@ private fun LocalBrowserScreen(
                     entries = visibleEntries,
                     layout = layout,
                     highlightPath = highlightPath,
+                    fileNameMode = fileNameMode,
                     itemFactory = { source.toLocalLibraryItem(treeUri, it) },
                     actionEnabled = true,
                     actionUnsupportedMessage = null,
@@ -1281,6 +1388,7 @@ private fun AddSmbPanel(
     onStartSourceScan: (SmbConfig) -> Unit,
     onOpenBrowser: (SmbConfig) -> Unit,
     contentScrollable: Boolean = true,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1307,11 +1415,22 @@ private fun AddSmbPanel(
     var busy by remember { mutableStateOf(false) }
     var entries by remember { mutableStateOf<List<SmbEntry>>(emptyList()) }
     var remoteEntries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
+    var previewSortName by rememberSaveable { mutableStateOf(MediaSort.NAME.name) }
+    var previewSortAscending by rememberSaveable { mutableStateOf(true) }
+    var previewFilterName by rememberSaveable { mutableStateOf(MediaEntryFilter.ALL.name) }
     var discoveredServices by remember { mutableStateOf<List<DiscoveredService>>(emptyList()) }
     var discoveryBusy by remember { mutableStateOf(false) }
     var oauthUrl by remember { mutableStateOf<String?>(null) }
     var oauthConfig by remember { mutableStateOf<RemoteSourceConfig?>(null) }
     var oauthState by remember { mutableStateOf("") }
+    val previewSort = enumValueOrDefault(previewSortName, MediaSort.NAME)
+    val previewFilter = enumValueOrDefault(previewFilterName, MediaEntryFilter.ALL)
+    val visibleSmbEntries = entries
+        .filterEntriesFor(previewFilter)
+        .sortedEntriesFor(previewSort, previewSortAscending)
+    val visibleRemoteEntries = remoteEntries
+        .filterRemoteEntriesFor(previewFilter)
+        .sortedRemoteEntriesFor(previewSort, previewSortAscending)
 
     LaunchedEffect(initialConfig) {
         selectedSourceType = initialSourceType.name
@@ -2131,9 +2250,29 @@ private fun AddSmbPanel(
             }
 
             StatusLine(status = status)
+            if (entries.isNotEmpty() || remoteEntries.isNotEmpty()) {
+                SourceBrowserControls(
+                    filter = previewFilter,
+                    sort = previewSort,
+                    ascending = previewSortAscending,
+                    layout = MediaLayout.LIST,
+                    onFilter = { previewFilterName = it.name },
+                    onSort = {
+                        if (previewSort == it) {
+                            previewSortAscending = !previewSortAscending
+                        } else {
+                            previewSortName = it.name
+                            previewSortAscending = true
+                        }
+                    },
+                    onLayout = {},
+                    showLayout = false
+                )
+            }
             if (entries.isNotEmpty()) {
                 DirectoryEntries(
-                    entries = entries,
+                    entries = visibleSmbEntries,
+                    fileNameMode = fileNameMode,
                     onDirectoryClick = { entry ->
                         path = entry.path
                         val config = currentConfig().copy(path = entry.path)
@@ -2149,7 +2288,7 @@ private fun AddSmbPanel(
                     onMediaClick = { entry ->
                         val config = currentConfig()
                         registerForSession(config)
-                        val mediaItems = entries.filter { it.isMedia }.map { config.toLibraryItem(it) }
+                        val mediaItems = visibleSmbEntries.filter { it.isMedia }.map { config.toLibraryItem(it) }
                         val selected = mediaItems.firstOrNull { it.path == entry.path } ?: config.toLibraryItem(entry)
                         val queue = mediaItems.ifEmpty { listOf(selected) }
                         onMediaDiscovered(queue)
@@ -2160,7 +2299,8 @@ private fun AddSmbPanel(
             }
             if (remoteEntries.isNotEmpty()) {
                 RemoteDirectoryEntries(
-                    entries = remoteEntries,
+                    entries = visibleRemoteEntries,
+                    fileNameMode = fileNameMode,
                     onDirectoryClick = { entry ->
                         remotePath = entry.path
                         currentRemoteConfigOrNull()?.copy(path = entry.path, token = remoteToken, userId = remoteUserId)?.let { config ->
@@ -2181,7 +2321,7 @@ private fun AddSmbPanel(
                     onMediaClick = { entry ->
                         currentRemoteConfigOrNull()?.copy(path = remotePath, token = remoteToken, userId = remoteUserId)?.let { config ->
                             RemoteSourceRegistry.register(config)
-                            val mediaItems = remoteEntries.filter { !it.isDirectory && it.isMediaEntry() }.map { config.toLibraryItem(it) }
+                            val mediaItems = visibleRemoteEntries.filter { !it.isDirectory && it.isMediaEntry() }.map { config.toLibraryItem(it) }
                             val selected = mediaItems.firstOrNull { it.path == entry.path } ?: config.toLibraryItem(entry)
                             val queue = mediaItems.ifEmpty { listOf(selected) }
                             onMediaDiscovered(queue)
@@ -2449,6 +2589,7 @@ private fun DiscoveryResults(
 @Composable
 private fun DirectoryEntries(
     entries: List<SmbEntry>,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onDirectoryClick: (SmbEntry) -> Unit,
     onMediaClick: (SmbEntry) -> Unit
 ) {
@@ -2476,7 +2617,13 @@ private fun DirectoryEntries(
                         tint = if (entry.isDirectory) PrimaryAmber else TextMuted
                     )
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(entry.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        FileNameText(
+                            text = entry.name,
+                            mode = fileNameMode,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            expandedLines = 3
+                        )
                         Text(
                             text = when {
                                 entry.isDirectory -> "文件夹"
@@ -2501,6 +2648,7 @@ private fun DirectoryEntries(
 private fun RemoteDirectoryEntries(
     entries: List<RemoteEntry>,
     highlightPath: String? = null,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onDirectoryClick: (RemoteEntry) -> Unit,
     onMediaClick: (RemoteEntry) -> Unit
 ) {
@@ -2529,7 +2677,13 @@ private fun RemoteDirectoryEntries(
                         tint = if (entry.isDirectory) PrimaryAmber else TextMuted
                     )
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(entry.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        FileNameText(
+                            text = entry.name,
+                            mode = fileNameMode,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            expandedLines = 3
+                        )
                         Text(
                             text = when {
                                 highlighted -> "当前文件"
@@ -2555,6 +2709,7 @@ private fun RemoteDirectoryEntries(
 private fun LocalDirectoryEntries(
     entries: List<RemoteEntry>,
     highlightPath: String? = null,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onDirectoryClick: (RemoteEntry) -> Unit,
     onMediaClick: (RemoteEntry) -> Unit
 ) {
@@ -2583,7 +2738,13 @@ private fun LocalDirectoryEntries(
                         tint = if (entry.isDirectory) PrimaryAmber else TextMuted
                     )
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(entry.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        FileNameText(
+                            text = entry.name,
+                            mode = fileNameMode,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            expandedLines = 3
+                        )
                         Text(
                             text = when {
                                 highlighted -> "当前文件"
@@ -2607,19 +2768,20 @@ private fun LocalDirectoryEntries(
 
 @Composable
 private fun SourceBrowserControls(
-    filter: SourceBrowserFilter,
+    filter: MediaEntryFilter,
     sort: MediaSort,
     ascending: Boolean,
     layout: MediaLayout,
-    onFilter: (SourceBrowserFilter) -> Unit,
+    onFilter: (MediaEntryFilter) -> Unit,
     onSort: (MediaSort) -> Unit,
-    onLayout: (MediaLayout) -> Unit
+    onLayout: (MediaLayout) -> Unit,
+    showLayout: Boolean = true
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(horizontal = 2.dp)
     ) {
-        items(SourceBrowserFilter.entries) { option ->
+        items(MediaEntryFilter.entries) { option ->
             FilterChip(
                 selected = filter == option,
                 onClick = { onFilter(option) },
@@ -2648,19 +2810,21 @@ private fun SourceBrowserControls(
                 )
             )
         }
-        items(MediaLayout.entries) { option ->
-            FilterChip(
-                selected = layout == option,
-                onClick = { onLayout(option) },
-                label = { Text(option.label) },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = SoftTeal.copy(alpha = 0.16f),
-                    selectedLabelColor = SoftTeal
+        if (showLayout) {
+            items(MediaLayout.entries) { option ->
+                FilterChip(
+                    selected = layout == option,
+                    onClick = { onLayout(option) },
+                    label = { Text(option.label) },
+                    shape = RoundedCornerShape(7.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f),
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        selectedContainerColor = SoftTeal.copy(alpha = 0.16f),
+                        selectedLabelColor = SoftTeal
+                    )
                 )
-            )
+            }
         }
     }
 }
@@ -2670,6 +2834,7 @@ private fun SourceBrowserEntries(
     entries: List<RemoteEntry>,
     layout: MediaLayout,
     highlightPath: String? = null,
+    fileNameMode: FileNameDisplayMode,
     itemFactory: (RemoteEntry) -> LibraryItem,
     actionEnabled: Boolean,
     actionUnsupportedMessage: String?,
@@ -2685,6 +2850,7 @@ private fun SourceBrowserEntries(
                     entry = entry,
                     previewItem = if (entry.isMediaEntry()) itemFactory(entry) else null,
                     highlighted = highlightPath?.trim('/')?.equals(entry.path.trim('/'), ignoreCase = true) == true,
+                    fileNameMode = fileNameMode,
                     actionEnabled = actionEnabled,
                     actionUnsupportedMessage = actionUnsupportedMessage,
                     onDirectoryClick = onDirectoryClick,
@@ -2702,6 +2868,7 @@ private fun SourceBrowserEntries(
                             previewItem = if (entry.isMediaEntry()) itemFactory(entry) else null,
                             compact = layout == MediaLayout.SMALL,
                             highlighted = highlightPath?.trim('/')?.equals(entry.path.trim('/'), ignoreCase = true) == true,
+                            fileNameMode = fileNameMode,
                             actionEnabled = actionEnabled,
                             actionUnsupportedMessage = actionUnsupportedMessage,
                             onDirectoryClick = onDirectoryClick,
@@ -2724,6 +2891,7 @@ private fun SourceBrowserEntryRow(
     entry: RemoteEntry,
     previewItem: LibraryItem?,
     highlighted: Boolean,
+    fileNameMode: FileNameDisplayMode,
     actionEnabled: Boolean,
     actionUnsupportedMessage: String?,
     onDirectoryClick: (RemoteEntry) -> Unit,
@@ -2754,7 +2922,13 @@ private fun SourceBrowserEntryRow(
                     .aspectRatio(1.28f)
             )
             Column(modifier = Modifier.weight(1f)) {
-                Text(entry.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                FileNameText(
+                    text = entry.name,
+                    mode = fileNameMode,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    expandedLines = 3
+                )
                 Text(entry.browserSubtitle(highlighted), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (entry.isDirectory) {
@@ -2776,6 +2950,7 @@ private fun SourceBrowserEntryCard(
     previewItem: LibraryItem?,
     compact: Boolean,
     highlighted: Boolean,
+    fileNameMode: FileNameDisplayMode,
     actionEnabled: Boolean,
     actionUnsupportedMessage: String?,
     onDirectoryClick: (RemoteEntry) -> Unit,
@@ -2803,16 +2978,34 @@ private fun SourceBrowserEntryCard(
                     .fillMaxWidth()
                     .aspectRatio(if (compact) 1.12f else 1.35f)
             )
-            Text(entry.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
-            if (!compact) {
-                Text(entry.browserSubtitle(highlighted), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            IconButton(
-                enabled = actionEnabled || actionUnsupportedMessage != null,
-                onClick = { onActionClick(entry) },
-                modifier = Modifier.align(Alignment.End)
+            FileNameText(
+                text = entry.name,
+                mode = fileNameMode,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                foldedLines = 1,
+                expandedLines = if (compact) 2 else 3
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    entry.browserSubtitle(highlighted),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    enabled = actionEnabled || actionUnsupportedMessage != null,
+                    onClick = { onActionClick(entry) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
@@ -3283,6 +3476,21 @@ private fun resolveLocalTargetDirectory(
     return parent
 }
 
+private fun documentStackFor(rootDocumentId: String, currentDocumentId: String): List<String> {
+    if (rootDocumentId.isBlank()) return listOf(currentDocumentId)
+    if (currentDocumentId.isBlank() || currentDocumentId == rootDocumentId) return listOf(rootDocumentId)
+    if (!currentDocumentId.startsWith(rootDocumentId)) return listOf(rootDocumentId, currentDocumentId)
+    val suffix = currentDocumentId.removePrefix(rootDocumentId).trim('/')
+    if (suffix.isBlank()) return listOf(rootDocumentId)
+    val stack = mutableListOf(rootDocumentId)
+    var cursor = rootDocumentId
+    suffix.split('/').filter { it.isNotBlank() }.forEach { part ->
+        cursor = "$cursor/$part"
+        stack += cursor
+    }
+    return stack.distinct()
+}
+
 private fun MediaSource.toLocalLibraryItem(treeUri: Uri, entry: RemoteEntry): LibraryItem {
     val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, entry.path)
     val extension = entry.name.substringAfterLast('.', "").uppercase(Locale.US)
@@ -3314,15 +3522,6 @@ private fun MediaSource.toLocalLibraryItem(treeUri: Uri, entry: RemoteEntry): Li
         genres = listOf("本机目录", mediaType, extension)
     )
 }
-
-private fun List<RemoteEntry>.filterForSourceBrowser(filter: SourceBrowserFilter): List<RemoteEntry> =
-    when (filter) {
-        SourceBrowserFilter.ALL -> this
-        SourceBrowserFilter.FOLDERS -> filter { it.isDirectory }
-        SourceBrowserFilter.VIDEOS -> filter { !it.isDirectory && (it.name.isVideoFileName() || it.mimeType?.startsWith("video/", ignoreCase = true) == true) }
-        SourceBrowserFilter.IMAGES -> filter { !it.isDirectory && (it.name.isImageFileName() || it.mimeType?.startsWith("image/", ignoreCase = true) == true) }
-        SourceBrowserFilter.FILES -> filter { !it.isDirectory }
-    }
 
 private fun RemoteEntry.browserSubtitle(highlighted: Boolean): String = when {
     highlighted -> "当前文件"

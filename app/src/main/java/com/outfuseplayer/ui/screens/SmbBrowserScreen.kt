@@ -73,14 +73,21 @@ import com.outfuseplayer.data.smb.toReadableSize
 import com.outfuseplayer.data.smb.toRemotePath
 import com.outfuseplayer.data.MediaOutputRepository
 import com.outfuseplayer.data.SettingsStore
+import com.outfuseplayer.data.SourceBrowserViewState
+import com.outfuseplayer.data.SourceBrowserViewStateStore
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.SourceHealth
 import com.outfuseplayer.model.SourceType
+import com.outfuseplayer.ui.FileNameDisplayMode
+import com.outfuseplayer.ui.MediaEntryFilter
 import com.outfuseplayer.ui.MediaLayout
 import com.outfuseplayer.ui.MediaSort
 import com.outfuseplayer.ui.FileAction
+import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
+import com.outfuseplayer.ui.enumValueOrDefault
+import com.outfuseplayer.ui.filterEntriesFor
 import com.outfuseplayer.ui.sortedEntriesFor
 import com.outfuseplayer.ui.theme.PrimaryAmber
 import com.outfuseplayer.ui.theme.PrimaryOrange
@@ -95,6 +102,7 @@ fun SmbBrowserScreen(
     expanded: Boolean,
     publishSourceStatus: Boolean = true,
     highlightPath: String? = null,
+    fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onBack: () -> Unit,
     onSourceAdded: (MediaSource) -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
@@ -104,16 +112,37 @@ fun SmbBrowserScreen(
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var currentPath by rememberSaveable(initialConfig.sourceId, initialConfig.path) { mutableStateOf(initialConfig.path) }
+    val viewStateStore = remember { SourceBrowserViewStateStore(context) }
+    val savedViewState = remember(initialConfig.sourceId, initialConfig.path, highlightPath) {
+        val persisted = viewStateStore.load(
+            sourceId = initialConfig.sourceId,
+            defaultSortName = MediaSort.NAME.name,
+            defaultSortAscending = true,
+            defaultLayoutName = MediaLayout.LIST.name,
+            defaultFilterName = MediaEntryFilter.ALL.name,
+            defaultPath = initialConfig.path
+        )
+        if (highlightPath != null) {
+            persisted.copy(currentPath = initialConfig.path)
+        } else {
+            persisted.copy(currentPath = persisted.currentPath.ifBlank { initialConfig.path })
+        }
+    }
+    var currentPath by rememberSaveable(initialConfig.sourceId, initialConfig.path, highlightPath) { mutableStateOf(savedViewState.currentPath) }
     var entries by remember { mutableStateOf<List<SmbEntry>>(emptyList()) }
     var status by rememberSaveable(initialConfig.sourceId) { mutableStateOf("正在打开目录") }
     var busy by remember { mutableStateOf(false) }
-    var sortName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaSort.NAME.name) }
-    var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(MediaLayout.LIST.name) }
+    var sortName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.sortName) }
+    var sortAscending by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.sortAscending) }
+    var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.layoutName) }
+    var filterName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.filterName) }
     var actionEntry by remember { mutableStateOf<SmbEntry?>(null) }
-    val sort = MediaSort.valueOf(sortName)
-    val layout = MediaLayout.valueOf(layoutName)
-    val sortedEntries = entries.sortedEntriesFor(sort)
+    val sort = enumValueOrDefault(sortName, MediaSort.NAME)
+    val layout = enumValueOrDefault(layoutName, MediaLayout.LIST)
+    val filter = enumValueOrDefault(filterName, MediaEntryFilter.ALL)
+    val visibleEntries = entries
+        .filterEntriesFor(filter)
+        .sortedEntriesFor(sort, sortAscending)
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val normalizedHighlight = highlightPath?.toRemotePath()
@@ -148,7 +177,7 @@ fun SmbBrowserScreen(
     }
 
     fun openMediaEntry(config: SmbConfig, entry: SmbEntry) {
-        val mediaItems = sortedEntries.filter { it.isMedia }.map { config.toLibraryItem(it) }
+        val mediaItems = visibleEntries.filter { it.isMedia }.map { config.toLibraryItem(it) }
         val selected = mediaItems.firstOrNull { it.path == entry.path } ?: config.toLibraryItem(entry)
         val queue = mediaItems.ifEmpty { listOf(selected) }
         publishSource(config, SourceHealth.ONLINE, "正在打开 ${entry.name}")
@@ -161,8 +190,21 @@ fun SmbBrowserScreen(
         loadPath(currentPath)
     }
 
-    LaunchedEffect(sortedEntries, normalizedHighlight, layout) {
-        val index = sortedEntries.indexOfFirst { entry ->
+    LaunchedEffect(initialConfig.sourceId, currentPath, sortName, sortAscending, layoutName, filterName) {
+        viewStateStore.save(
+            initialConfig.sourceId,
+            SourceBrowserViewState(
+                sortName = sortName,
+                sortAscending = sortAscending,
+                layoutName = layoutName,
+                filterName = filterName,
+                currentPath = currentPath
+            )
+        )
+    }
+
+    LaunchedEffect(visibleEntries, normalizedHighlight, layout) {
+        val index = visibleEntries.indexOfFirst { entry ->
             normalizedHighlight != null && entry.path.toRemotePath().equals(normalizedHighlight, ignoreCase = true)
         }
         if (index >= 0) {
@@ -231,26 +273,50 @@ fun SmbBrowserScreen(
             BrowserStatusLine(status = status, busy = busy)
 
             BrowserViewControls(
+                filter = filter,
                 sort = sort,
+                ascending = sortAscending,
                 layout = layout,
-                onSort = { sortName = it.name },
+                onFilter = { filterName = it.name },
+                onSort = {
+                    if (sort == it) {
+                        sortAscending = !sortAscending
+                    } else {
+                        sortName = it.name
+                        sortAscending = true
+                    }
+                },
                 onLayout = { layoutName = it.name }
             )
 
-            if (layout == MediaLayout.LIST) {
+            if (!busy && visibleEntries.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                ) {
+                    Text(
+                        text = "当前目录没有匹配的文件或文件夹。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            } else if (layout == MediaLayout.LIST) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     state = listState,
                     contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(sortedEntries, key = { it.path }) { entry ->
+                    items(visibleEntries, key = { it.path }) { entry ->
                         val config = activeConfig()
                         val highlighted = normalizedHighlight != null && entry.path.toRemotePath().equals(normalizedHighlight, ignoreCase = true)
                         BrowserEntryRow(
                             entry = entry,
                             previewItem = if (entry.isMedia) config.toLibraryItem(entry) else null,
                             highlighted = highlighted,
+                            fileNameMode = fileNameMode,
                             onActionClick = { actionEntry = entry },
                             onClick = {
                                 when {
@@ -270,7 +336,7 @@ fun SmbBrowserScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    gridItems(sortedEntries, key = { it.path }) { entry ->
+                    gridItems(visibleEntries, key = { it.path }) { entry ->
                         val config = activeConfig()
                         val highlighted = normalizedHighlight != null && entry.path.toRemotePath().equals(normalizedHighlight, ignoreCase = true)
                         BrowserEntryCard(
@@ -278,6 +344,7 @@ fun SmbBrowserScreen(
                             previewItem = if (entry.isMedia) config.toLibraryItem(entry) else null,
                             compact = layout == MediaLayout.SMALL,
                             highlighted = highlighted,
+                            fileNameMode = fileNameMode,
                             onActionClick = { actionEntry = entry },
                             onClick = {
                                 when {
@@ -391,8 +458,11 @@ private fun BrowserStatusLine(status: String, busy: Boolean) {
 
 @Composable
 private fun BrowserViewControls(
+    filter: MediaEntryFilter,
     sort: MediaSort,
+    ascending: Boolean,
     layout: MediaLayout,
+    onFilter: (MediaEntryFilter) -> Unit,
     onSort: (MediaSort) -> Unit,
     onLayout: (MediaLayout) -> Unit
 ) {
@@ -400,11 +470,26 @@ private fun BrowserViewControls(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(horizontal = 2.dp)
     ) {
-        items(MediaSort.entries) { option ->
+        items(MediaEntryFilter.entries) { option ->
             FilterChip(
-                selected = sort == option,
-                onClick = { onSort(option) },
+                selected = filter == option,
+                onClick = { onFilter(option) },
                 label = { Text(option.label) },
+                shape = RoundedCornerShape(7.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
+                    selectedLabelColor = PrimaryOrange
+                )
+            )
+        }
+        items(MediaSort.entries) { option ->
+            val active = sort == option
+            FilterChip(
+                selected = active,
+                onClick = { onSort(option) },
+                label = { Text(if (active) "${option.label}${if (ascending) "↑" else "↓"}" else option.label) },
                 shape = RoundedCornerShape(7.dp),
                 colors = FilterChipDefaults.filterChipColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
@@ -436,6 +521,7 @@ private fun BrowserEntryRow(
     entry: SmbEntry,
     previewItem: LibraryItem?,
     highlighted: Boolean,
+    fileNameMode: FileNameDisplayMode,
     onActionClick: () -> Unit,
     onClick: () -> Unit
 ) {
@@ -461,12 +547,12 @@ private fun BrowserEntryRow(
                     .aspectRatio(1.28f)
             )
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    entry.name,
+                FileNameText(
+                    text = entry.name,
+                    mode = fileNameMode,
                     style = MaterialTheme.typography.titleMedium,
                     color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    expandedLines = 3
                 )
                 Text(
                     text = when {
@@ -498,6 +584,7 @@ private fun BrowserEntryCard(
     previewItem: LibraryItem?,
     compact: Boolean,
     highlighted: Boolean,
+    fileNameMode: FileNameDisplayMode,
     onActionClick: () -> Unit,
     onClick: () -> Unit
 ) {
@@ -521,14 +608,19 @@ private fun BrowserEntryCard(
                     .fillMaxWidth()
                     .aspectRatio(if (compact) 1.15f else 1.35f)
             )
-            Text(
-                entry.name,
+            FileNameText(
+                text = entry.name,
+                mode = fileNameMode,
                 style = MaterialTheme.typography.labelLarge,
                 color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (compact) 1 else 2,
-                overflow = TextOverflow.Ellipsis
+                foldedLines = if (compact) 1 else 1,
+                expandedLines = if (compact) 2 else 3
             )
-            if (!compact) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(
                     text = when {
                         highlighted -> "当前文件 · ${entry.size.toReadableSize()}"
@@ -540,11 +632,12 @@ private fun BrowserEntryCard(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-            }
-            IconButton(onClick = onActionClick, modifier = Modifier.align(Alignment.End)) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                IconButton(onClick = onActionClick, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

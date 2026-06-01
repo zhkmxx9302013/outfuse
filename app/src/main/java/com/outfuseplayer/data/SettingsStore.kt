@@ -39,7 +39,9 @@ data class AppSettings(
     val showDiagnostics: Boolean = true,
     val screenshotSaveTreeUri: String = "",
     val fileDownloadTreeUri: String = "",
-    val firstRunGuideSeen: Boolean = false
+    val firstRunGuideSeen: Boolean = false,
+    val fileNameDisplayMode: String = "ELLIPSIS",
+    val imageSlideshowIntervalSeconds: Int = 4
 )
 
 class SettingsStore(context: Context) {
@@ -82,7 +84,9 @@ class SettingsStore(context: Context) {
         showDiagnostics = prefs.getBoolean(KEY_SHOW_DIAGNOSTICS, true),
         screenshotSaveTreeUri = prefs.getString(KEY_SCREENSHOT_SAVE_TREE_URI, "") ?: "",
         fileDownloadTreeUri = prefs.getString(KEY_FILE_DOWNLOAD_TREE_URI, "") ?: "",
-        firstRunGuideSeen = prefs.getBoolean(KEY_FIRST_RUN_GUIDE_SEEN, false)
+        firstRunGuideSeen = prefs.getBoolean(KEY_FIRST_RUN_GUIDE_SEEN, false),
+        fileNameDisplayMode = prefs.getString(KEY_FILE_NAME_DISPLAY_MODE, "ELLIPSIS") ?: "ELLIPSIS",
+        imageSlideshowIntervalSeconds = prefs.getInt(KEY_IMAGE_SLIDESHOW_INTERVAL_SECONDS, 4).coerceIn(1, 60)
     )
 
     fun save(settings: AppSettings) {
@@ -124,6 +128,8 @@ class SettingsStore(context: Context) {
             .putString(KEY_SCREENSHOT_SAVE_TREE_URI, settings.screenshotSaveTreeUri)
             .putString(KEY_FILE_DOWNLOAD_TREE_URI, settings.fileDownloadTreeUri)
             .putBoolean(KEY_FIRST_RUN_GUIDE_SEEN, settings.firstRunGuideSeen)
+            .putString(KEY_FILE_NAME_DISPLAY_MODE, settings.fileNameDisplayMode)
+            .putInt(KEY_IMAGE_SLIDESHOW_INTERVAL_SECONDS, settings.imageSlideshowIntervalSeconds.coerceIn(1, 60))
             .apply()
     }
 
@@ -183,6 +189,8 @@ class SettingsStore(context: Context) {
         private const val KEY_SCREENSHOT_SAVE_TREE_URI = "screenshot_save_tree_uri"
         private const val KEY_FILE_DOWNLOAD_TREE_URI = "file_download_tree_uri"
         private const val KEY_FIRST_RUN_GUIDE_SEEN = "first_run_guide_seen"
+        private const val KEY_FILE_NAME_DISPLAY_MODE = "file_name_display_mode"
+        private const val KEY_IMAGE_SLIDESHOW_INTERVAL_SECONDS = "image_slideshow_interval_seconds"
         private const val KEY_HISTORY_CLEARED_AT = "history_cleared_at"
         private const val KEY_CACHES_CLEARED_AT = "caches_cleared_at"
     }
