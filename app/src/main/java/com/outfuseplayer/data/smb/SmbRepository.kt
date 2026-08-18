@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.data.smb
+package com.outfuseplayer.data.smb
 
 import com.hierynomus.msdtyp.AccessMask
 import com.hierynomus.msfscc.FileAttributes
@@ -170,6 +170,13 @@ class SmbRepository {
                     }
 
                     if (!listed) {
+                        // Treat unreadable directories like unchanged ones so the
+                        // caller keeps their existing library items instead of
+                        // removing them as "missing".
+                        val cachedStats = onSkippedDirectory(currentPath)
+                        mediaFound += cachedStats.mediaCount
+                        videoCount += cachedStats.videoCount
+                        imageCount += cachedStats.imageCount
                         report(currentPath, pending.size)
                         continue
                     }

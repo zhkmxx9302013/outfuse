@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.ui.screens
+package com.outfuseplayer.ui.screens
 
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.OpenInNew
@@ -149,6 +150,16 @@ fun SettingsScreen(
                 text = notice,
                 modifier = Modifier.padding(horizontal = if (expanded) 32.dp else 20.dp)
             )
+        }
+        item {
+            SettingsSection(
+                title = "关于",
+                icon = Icons.Outlined.Info,
+                tint = ElectricBlue,
+                expanded = expanded
+            ) {
+                SettingsVersionRow()
+            }
         }
         item {
             SettingsSection(
@@ -497,8 +508,9 @@ fun SettingsScreen(
                 OutlinedButton(
                     onClick = {
                         ThumbnailRepository.clearMemoryCache()
+                        ThumbnailRepository.clearDiskCache()
                         store.markCachesCleared()
-                        notice = strings.text("已清理当前缩略图内存缓存，并写入缓存清理标记。")
+                        notice = strings.text("已清理缩略图内存与磁盘缓存，并写入缓存清理标记。")
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(7.dp),
@@ -621,6 +633,34 @@ private fun SettingsTopBar(expanded: Boolean) {
     ) {
         Text(strings.settings, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
         Text(strings.settingsSubtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SettingsVersionRow() {
+    val context = LocalContext.current
+    val versionName = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "软件版本",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            if (versionName.isBlank()) "outfuse" else "v$versionName",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 

@@ -27,7 +27,8 @@ enum class SourceType {
     ONEDRIVE,
     DROPBOX,
     BAIDU_NETDISK,
-    ALIYUN_DRIVE
+    ALIYUN_DRIVE,
+    PAN_123
 }
 
 enum class SourceHealth {

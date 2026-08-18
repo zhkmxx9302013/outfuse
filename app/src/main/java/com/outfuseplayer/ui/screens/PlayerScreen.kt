@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.ui.screens
+package com.outfuseplayer.ui.screens
 
 import android.app.Activity
 import android.content.Intent
@@ -55,13 +55,16 @@ import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Forward10
 import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.QueueMusic
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Replay10
+import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shuffle
@@ -71,17 +74,23 @@ import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.SurroundSound
 import androidx.compose.material.icons.outlined.Tv
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -96,8 +105,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -106,6 +117,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MediaItem as ExoMediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -128,6 +140,7 @@ import com.outfuseplayer.playback.resolveIjkDirectStream
 import com.outfuseplayer.playback.resolveVlcStreamUri
 import com.outfuseplayer.ui.components.FilePreviewThumb
 import com.outfuseplayer.ui.components.PosterImage
+import com.outfuseplayer.ui.theme.Danger
 import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
@@ -164,6 +177,13 @@ private enum class DecodeMode(val label: String) {
     AUTO("自动"),
     HARDWARE("硬解优先"),
     SOFTWARE("软解兼容")
+}
+
+private enum class VideoRotation(val degrees: Float, val label: String) {
+    DEG_0(0f, "0°"),
+    DEG_90(90f, "90°"),
+    DEG_180(180f, "180°"),
+    DEG_270(270f, "270°")
 }
 
 private enum class SoundBoostMode(val label: String, val gain: Float) {
@@ -318,27 +338,48 @@ fun PlayerScreen(
     expanded: Boolean,
     startShuffle: Boolean = false,
     onShowFileLocation: (LibraryItem) -> Unit = {},
+    onRemoveFromLibrary: (LibraryItem) -> Unit = {},
+    onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
+    onOpenMultiPlayer: (List<LibraryItem>) -> Unit = { _ -> },
+    onReturnToMultiPlayer: (() -> Unit)? = null,
     onBack: () -> Unit
 ) {
-    if (item.requiresVlcPlayer()) {
-        VlcFallbackPlayerScreen(
-            item = item,
-            playlist = playlist,
-            expanded = expanded,
-            startShuffle = startShuffle,
-            onShowFileLocation = onShowFileLocation,
-            onBack = onBack
-        )
-        return
+    var forceIjkFallback by remember(item.id, item.streamUrl) { mutableStateOf(false) }
+    var forceExoFallback by remember(item.id, item.streamUrl) { mutableStateOf(false) }
+    val multiPlaylist = remember(item.id, playlist) {
+        playlist.ifEmpty { listOf(item) }.filter { it.streamUrl != null }
     }
 
-    if (item.requiresIjkPlayer()) {
+    if (!forceExoFallback && (forceIjkFallback || item.requiresIjkPlayer())) {
         IjkFallbackPlayerScreen(
             item = item,
             playlist = playlist,
             expanded = expanded,
             startShuffle = startShuffle,
             onShowFileLocation = onShowFileLocation,
+            onFallbackToExo = { forceExoFallback = true },
+            onRemoveFromLibrary = onRemoveFromLibrary,
+            onAutoRemoveIfMissing = onAutoRemoveIfMissing,
+            onOpenMultiPlayer = { onOpenMultiPlayer(multiPlaylist) },
+            onReturnToMultiPlayer = onReturnToMultiPlayer,
+            onBack = onBack
+        )
+        return
+    }
+
+    if (!forceExoFallback && item.requiresVlcPlayer()) {
+        VlcFallbackPlayerScreen(
+            item = item,
+            playlist = playlist,
+            expanded = expanded,
+            startShuffle = startShuffle,
+            onShowFileLocation = onShowFileLocation,
+            onFallbackToIjk = { forceIjkFallback = true },
+            onFallbackToExo = { forceExoFallback = true },
+            onRemoveFromLibrary = onRemoveFromLibrary,
+            onAutoRemoveIfMissing = onAutoRemoveIfMissing,
+            onOpenMultiPlayer = { onOpenMultiPlayer(multiPlaylist) },
+            onReturnToMultiPlayer = onReturnToMultiPlayer,
             onBack = onBack
         )
         return
@@ -362,12 +403,16 @@ fun PlayerScreen(
     }
     val queueKey = remember(playbackItems) { playbackItems.joinToString("|") { it.id } }
     val startIndex = playbackItems.indexOfFirst { it.id == item.id }.takeIf { it >= 0 } ?: 0
-    val startPositionMs = playbackItems.getOrNull(startIndex)?.let {
+    val savedPositionMs = playbackItems.getOrNull(startIndex)?.let {
         positionStore.get(it.id, it.path)
     } ?: 0L
+    // Ask whether to resume when there's meaningful saved progress.
+    var resumeFromStart by remember(item.id) { mutableStateOf(false) }
+    var showResumeDialog by remember(item.id) { mutableStateOf(savedPositionMs > 15_000) }
+    val startPositionMs = if (resumeFromStart) 0L else savedPositionMs
     var externalSubtitleItemId by remember { mutableStateOf<String?>(null) }
     var externalSubtitleUri by remember { mutableStateOf<String?>(null) }
-    val playerResult = remember(item.id, queueKey, externalSubtitleItemId, externalSubtitleUri) {
+    val playerResult = remember(item.id, queueKey, externalSubtitleItemId, externalSubtitleUri, resumeFromStart) {
         runCatching {
         val dataSourceFactory = OutfuseDataSourceFactory(context)
         val renderersFactory = DefaultRenderersFactory(context)
@@ -453,6 +498,7 @@ fun PlayerScreen(
     var durationMs by remember { mutableLongStateOf(1L) }
     var leavingPlayer by remember { mutableStateOf(false) }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
+    var videoRotation by remember(currentItem.id) { mutableStateOf(VideoRotation.DEG_0) }
     val saveScreenshot = rememberScreenshotSaver(currentItem, positionMs)
     val subtitleLabel = if (externalSubtitleItemId == currentItem.id && externalSubtitleUri != null) {
         Uri.parse(externalSubtitleUri).lastPathSegment?.substringAfterLast('/') ?: "外挂字幕"
@@ -516,6 +562,12 @@ fun PlayerScreen(
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 videoSize.toAspectRatio()?.let { sourceAspectRatio = it }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                saveCurrentPosition()
+                onAutoRemoveIfMissing(currentItem)
+                forceIjkFallback = true
             }
         }
         player.addListener(listener)
@@ -641,7 +693,7 @@ fun PlayerScreen(
             fitMode = fitMode,
             aspectRatio = aspectMode.ratio ?: sourceAspectRatio
         ) { surfaceModifier ->
-            PlayerSurface(player = player, modifier = surfaceModifier)
+            PlayerSurface(player = player, rotationDegrees = videoRotation.degrees, modifier = surfaceModifier)
         }
         VideoColorOverlay(
             ambienceMode = ambienceMode,
@@ -692,7 +744,8 @@ fun PlayerScreen(
                         moreVisible = !moreVisible
                         settingsVisible = false
                         playlistVisible = false
-                    }
+                    },
+                    onReturnToMultiPlayer = onReturnToMultiPlayer
                 )
                 PlayerBottomControls(
                     item = currentItem,
@@ -718,6 +771,11 @@ fun PlayerScreen(
                     },
                     onToggleFit = {
                         fitMode = if (fitMode == PlayerFitMode.CROP) PlayerFitMode.FIT else PlayerFitMode.CROP
+                    },
+                    onOpenMultiPlayer = if (expanded) {
+                        { onOpenMultiPlayer(multiPlaylist) }
+                    } else {
+                        null
                     },
                     expanded = expanded,
                     modifier = Modifier.align(Alignment.BottomCenter)
@@ -765,6 +823,14 @@ fun PlayerScreen(
                         moreVisible = false
                         saveScreenshot()
                     },
+                    onOpenMultiPlayer = if (expanded) {
+                        {
+                            moreVisible = false
+                            onOpenMultiPlayer(multiPlaylist)
+                        }
+                    } else {
+                        null
+                    },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .safeDrawingPadding()
@@ -795,6 +861,8 @@ fun PlayerScreen(
                     onFitModeChange = { fitMode = it },
                     aspectMode = aspectMode,
                     onAspectModeChange = { aspectMode = it },
+                    videoRotation = videoRotation,
+                    onVideoRotationChange = { videoRotation = it },
                     decodeMode = decodeMode,
                     onDecodeModeChange = { decodeMode = it },
                     soundBoost = soundBoost,
@@ -888,6 +956,26 @@ fun PlayerScreen(
             }
         }
     }
+    if (showResumeDialog) {
+        AlertDialog(
+            onDismissRequest = { showResumeDialog = false },
+            title = { Text("继续播放？") },
+            text = { Text("上次播放到 ${formatTime(savedPositionMs)}") },
+            confirmButton = {
+                TextButton(onClick = { showResumeDialog = false }) {
+                    Text("继续播放")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    resumeFromStart = true
+                    showResumeDialog = false
+                }) {
+                    Text("从头播放")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -896,6 +984,7 @@ private fun PlayerMorePanel(
     onOpenSettings: () -> Unit,
     onSaveScreenshot: () -> Unit,
     onShowFileLocation: () -> Unit,
+    onOpenMultiPlayer: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -917,6 +1006,14 @@ private fun PlayerMorePanel(
                 subtitle = "按当前播放时间保存到默认截图目录",
                 onClick = onSaveScreenshot
             )
+            if (onOpenMultiPlayer != null) {
+                MorePanelRow(
+                    icon = Icons.Outlined.GridView,
+                    title = "多窗口播放",
+                    subtitle = "同时播放最多 4 个视频（平板 / 横屏）",
+                    onClick = onOpenMultiPlayer
+                )
+            }
             MorePanelRow(
                 icon = Icons.Outlined.Settings,
                 title = "播放设置",
@@ -999,7 +1096,7 @@ private fun PlaybackStartupErrorScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "无法开始播放",
+                    text = "播放失败",
                     style = MaterialTheme.typography.titleLarge,
                     color = Color.White
                 )
@@ -1032,6 +1129,67 @@ private fun PlaybackStartupErrorScreen(
     }
 }
 
+/** Maps IJK/MediaPlayer error codes to friendly messages. */
+private fun ijkErrorText(what: Int, extra: Int): String = when (what) {
+    -1004 -> "无法读取媒体文件：文件可能已被删除、移动或网络不可达。"
+    -1007 -> "媒体文件已损坏或格式不受支持。"
+    -1010 -> "设备不支持该媒体的编码格式。"
+    -110 -> "读取媒体数据超时，请重试。"
+    else -> "播放失败（错误码 $what/$extra），可尝试重试或改用兼容内核。"
+}
+
+@Composable
+private fun PlayerErrorPanel(
+    message: String,
+    onRetry: () -> Unit,
+    onFallbackToExo: () -> Unit,
+    onRemoveFromLibrary: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.padding(24.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = OutfuseSurface.copy(alpha = 0.96f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("播放失败", style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted,
+                textAlign = TextAlign.Center
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(7.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                ) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("重试")
+                }
+                OutlinedButton(
+                    onClick = onFallbackToExo,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                ) {
+                    Text("改用系统内核")
+                }
+            }
+            TextButton(onClick = onRemoveFromLibrary) {
+                Text("从媒体库移除（文件可能已删除）", color = Danger)
+            }
+        }
+    }
+}
+
 @Composable
 private fun VlcFallbackPlayerScreen(
     item: LibraryItem,
@@ -1039,6 +1197,12 @@ private fun VlcFallbackPlayerScreen(
     expanded: Boolean,
     startShuffle: Boolean,
     onShowFileLocation: (LibraryItem) -> Unit,
+    onFallbackToIjk: () -> Unit,
+    onFallbackToExo: () -> Unit = {},
+    onRemoveFromLibrary: (LibraryItem) -> Unit = {},
+    onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
+    onOpenMultiPlayer: (() -> Unit)? = null,
+    onReturnToMultiPlayer: (() -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1079,21 +1243,15 @@ private fun VlcFallbackPlayerScreen(
     }
     val libVlc = libVlcResult.getOrNull()
     if (libVlc == null) {
-        PlaybackStartupErrorScreen(
-            item = currentItem,
-            message = "兼容播放器初始化失败：${libVlcResult.exceptionOrNull()?.message ?: libVlcResult.exceptionOrNull()?.javaClass?.simpleName ?: "未知错误"}",
-            onBack = onBack
-        )
+        LaunchedEffect(currentItem.id) { onFallbackToIjk() }
+        PlaybackStartupErrorScreen(item = currentItem, message = "正在切换播放内核", onBack = onBack)
         return
     }
     val playerResult = remember(libVlc) { runCatching { VlcMediaPlayer(libVlc) } }
     val player = playerResult.getOrNull()
     if (player == null) {
-        PlaybackStartupErrorScreen(
-            item = currentItem,
-            message = "兼容播放器创建失败：${playerResult.exceptionOrNull()?.message ?: playerResult.exceptionOrNull()?.javaClass?.simpleName ?: "未知错误"}",
-            onBack = onBack
-        )
+        LaunchedEffect(currentItem.id) { onFallbackToIjk() }
+        PlaybackStartupErrorScreen(item = currentItem, message = "正在切换播放内核", onBack = onBack)
         return
     }
     var controlsVisible by remember { mutableStateOf(true) }
@@ -1124,11 +1282,15 @@ private fun VlcFallbackPlayerScreen(
     var isPrepared by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     var pendingSeekMs by remember { mutableLongStateOf(0L) }
+    val savedPositionMs = remember(item.id) { positionStore.get(item.id, item.path) }
+    var resumeFromStart by remember(item.id) { mutableStateOf(false) }
+    var showResumeDialog by remember(item.id) { mutableStateOf(savedPositionMs > 15_000) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(1L) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var externalSubtitleUri by remember { mutableStateOf<String?>(null) }
     var leavingPlayer by remember { mutableStateOf(false) }
+    var videoRotation by remember(currentItem.id) { mutableStateOf(VideoRotation.DEG_0) }
     val saveScreenshot = rememberScreenshotSaver(currentItem, positionMs)
     val subtitleLabel = externalSubtitleUri
         ?.let { Uri.parse(it).lastPathSegment?.substringAfterLast('/') ?: "外挂字幕" }
@@ -1195,6 +1357,33 @@ private fun VlcFallbackPlayerScreen(
         }
     }
 
+    fun retryPlayback() {
+        errorMessage = null
+        isPrepared = false
+        isPlaying = false
+        controlsVisible = true
+        pendingSeekMs = if (resumeFromStart) 0L else positionStore.get(currentItem.id, currentItem.path)
+        runCatching {
+            player.stop()
+            val uri = resolveVlcStreamUri(currentItem) ?: Uri.parse(requireNotNull(currentItem.streamUrl))
+            val media = Media(libVlc, uri).apply {
+                setHWDecoderEnabled(true, false)
+                addOption(":network-caching=1200")
+                addOption(":file-caching=600")
+                addOption(":live-caching=1200")
+                addOption(":clock-jitter=0")
+                addOption(":clock-synchro=0")
+            }
+            player.media = media
+            media.release()
+            player.play()
+            applyVlcVolume(soundBoost)
+            applyVlcFit(fitMode, aspectMode)
+        }.onFailure { error ->
+            errorMessage = "兼容播放器初始化失败：${error.message ?: error.javaClass.simpleName}"
+        }
+    }
+
     val vlcSubtitleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -1245,7 +1434,9 @@ private fun VlcFallbackPlayerScreen(
                     isPlaying = false
                     isPrepared = false
                     controlsVisible = true
-                    errorMessage = "兼容播放器仍无法打开该文件，请确认文件未损坏或尝试转换封装。"
+                    errorMessage = "正在切换播放内核"
+                    onAutoRemoveIfMissing(currentItem)
+                    onFallbackToIjk()
                 }
             }
         }
@@ -1258,13 +1449,13 @@ private fun VlcFallbackPlayerScreen(
         }
     }
 
-    LaunchedEffect(currentItem.id, currentItem.streamUrl) {
+    LaunchedEffect(currentItem.id, currentItem.streamUrl, resumeFromStart) {
         isPrepared = false
         isPlaying = false
         errorMessage = null
         positionMs = 0L
         durationMs = 1L
-        pendingSeekMs = positionStore.get(currentItem.id, currentItem.path)
+        pendingSeekMs = if (resumeFromStart) 0L else positionStore.get(currentItem.id, currentItem.path)
         runCatching {
             player.stop()
             val uri = resolveVlcStreamUri(currentItem) ?: Uri.parse(requireNotNull(currentItem.streamUrl))
@@ -1284,6 +1475,7 @@ private fun VlcFallbackPlayerScreen(
         }.onFailure { error ->
             controlsVisible = true
             errorMessage = "兼容播放器初始化失败：${error.message ?: error.javaClass.simpleName}"
+            onAutoRemoveIfMissing(currentItem)
         }
     }
 
@@ -1341,7 +1533,7 @@ private fun VlcFallbackPlayerScreen(
             fitMode = fitMode,
             aspectRatio = aspectMode.ratio ?: sourceAspectRatio
         ) { surfaceModifier ->
-            VlcVideoSurface(player = player, modifier = surfaceModifier)
+            VlcVideoSurface(player = player, rotationDegrees = videoRotation.degrees, modifier = surfaceModifier)
         }
         VideoColorOverlay(
             ambienceMode = ambienceMode,
@@ -1428,7 +1620,13 @@ private fun VlcFallbackPlayerScreen(
             GestureText(text = feedback, modifier = Modifier.align(Alignment.Center))
         }
         errorMessage?.let { message ->
-            GestureText(text = message, modifier = Modifier.align(Alignment.Center))
+            PlayerErrorPanel(
+                message = message,
+                onRetry = ::retryPlayback,
+                onFallbackToExo = { onFallbackToExo() },
+                onRemoveFromLibrary = { onRemoveFromLibrary(currentItem) },
+                modifier = Modifier.align(Alignment.Center)
+            )
         }
         if (locked) {
             LockedOverlay(
@@ -1469,7 +1667,8 @@ private fun VlcFallbackPlayerScreen(
                         moreVisible = !moreVisible
                         settingsVisible = false
                         playlistVisible = false
-                    }
+                    },
+                    onReturnToMultiPlayer = onReturnToMultiPlayer
                 )
                 IjkBottomControls(
                     item = currentItem,
@@ -1515,6 +1714,14 @@ private fun VlcFallbackPlayerScreen(
                         moreVisible = false
                         saveScreenshot()
                     },
+                    onOpenMultiPlayer = if (expanded) {
+                        {
+                            moreVisible = false
+                            onOpenMultiPlayer?.invoke()
+                        }
+                    } else {
+                        null
+                    },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .safeDrawingPadding()
@@ -1540,6 +1747,8 @@ private fun VlcFallbackPlayerScreen(
                     onFitModeChange = { fitMode = it },
                     aspectMode = aspectMode,
                     onAspectModeChange = { aspectMode = it },
+                    videoRotation = videoRotation,
+                    onVideoRotationChange = { videoRotation = it },
                     decodeMode = decodeMode,
                     onDecodeModeChange = { decodeMode = it },
                     soundBoost = soundBoost,
@@ -1622,12 +1831,32 @@ private fun VlcFallbackPlayerScreen(
             }
         }
     }
+    if (showResumeDialog) {
+        AlertDialog(
+            onDismissRequest = { showResumeDialog = false },
+            title = { Text("继续播放？") },
+            text = { Text("上次播放到 ${formatTime(savedPositionMs)}") },
+            confirmButton = {
+                TextButton(onClick = { showResumeDialog = false }) {
+                    Text("继续播放")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    resumeFromStart = true
+                    showResumeDialog = false
+                }) {
+                    Text("从头播放")
+                }
+            }
+        )
+    }
 }
 
 @Composable
-private fun VlcVideoSurface(player: VlcMediaPlayer, modifier: Modifier = Modifier) {
+private fun VlcVideoSurface(player: VlcMediaPlayer, rotationDegrees: Float = 0f, modifier: Modifier = Modifier) {
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.graphicsLayer { rotationZ = rotationDegrees },
         factory = { context ->
             VLCVideoLayout(context).apply {
                 runCatching { player.attachViews(this, null, false, false) }
@@ -1649,6 +1878,11 @@ private fun IjkFallbackPlayerScreen(
     expanded: Boolean,
     startShuffle: Boolean,
     onShowFileLocation: (LibraryItem) -> Unit,
+    onFallbackToExo: () -> Unit = {},
+    onRemoveFromLibrary: (LibraryItem) -> Unit = {},
+    onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
+    onOpenMultiPlayer: (() -> Unit)? = null,
+    onReturnToMultiPlayer: (() -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1672,7 +1906,13 @@ private fun IjkFallbackPlayerScreen(
         mutableStateOf(playbackItems.indexOfFirst { it.id == item.id }.takeIf { it >= 0 } ?: 0)
     }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
-    val playerResult = remember {
+    // Recreate the IJK player whenever the item changes or a retry is
+    // requested. Reusing one instance across many reset()/prepare cycles can
+    // leave it wedged, which is a common cause of "cannot play" errors that
+    // only disappear after restarting the app.
+    var playerEpoch by remember(currentItem.id) { mutableIntStateOf(0) }
+    var autoRetried by remember(currentItem.id) { mutableStateOf(false) }
+    val playerResult = remember(currentItem.id, playerEpoch) {
         runCatching {
             IjkMediaPlayer.loadLibrariesOnce(null)
             IjkMediaPlayer().apply { configureIjkPlayer() }
@@ -1716,10 +1956,14 @@ private fun IjkFallbackPlayerScreen(
     var isPrepared by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     var pendingSeekMs by remember { mutableLongStateOf(0L) }
+    val savedPositionMs = remember(item.id) { positionStore.get(item.id, item.path) }
+    var resumeFromStart by remember(item.id) { mutableStateOf(false) }
+    var showResumeDialog by remember(item.id) { mutableStateOf(savedPositionMs > 15_000) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(1L) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var leavingPlayer by remember { mutableStateOf(false) }
+    var videoRotation by remember(currentItem.id) { mutableStateOf(VideoRotation.DEG_0) }
     val saveScreenshot = rememberScreenshotSaver(currentItem, positionMs)
     val playerGesturesEnabled = !locked && !settingsVisible && !moreVisible && !playlistVisible
 
@@ -1760,6 +2004,13 @@ private fun IjkFallbackPlayerScreen(
         controlsVisible = true
     }
 
+    fun retryPlayback() {
+        errorMessage = null
+        autoRetried = true
+        playerEpoch++
+        controlsVisible = true
+    }
+
     DisposableEffect(player, autoPlayNext) {
         player.setOnPreparedListener { mediaPlayer ->
             isPrepared = true
@@ -1784,7 +2035,8 @@ private fun IjkFallbackPlayerScreen(
             isPlaying = false
             isPrepared = false
             controlsVisible = true
-            errorMessage = "IJKPlayer 播放失败：$what / $extra"
+            errorMessage = ijkErrorText(what, extra)
+            onAutoRemoveIfMissing(currentItem)
             true
         }
         onDispose {
@@ -1796,11 +2048,22 @@ private fun IjkFallbackPlayerScreen(
         }
     }
 
-    LaunchedEffect(currentItem.id, currentItem.streamUrl) {
+    // Transient failures (SMB session limits, timeouts) usually resolve by
+    // recreating the player with a fresh connection, so retry once automatically.
+    LaunchedEffect(errorMessage, currentItem.id) {
+        if (errorMessage != null && !autoRetried) {
+            delay(1800)
+            if (errorMessage != null) {
+                retryPlayback()
+            }
+        }
+    }
+
+    LaunchedEffect(currentItem.id, currentItem.streamUrl, playerEpoch, resumeFromStart) {
         isPrepared = false
         isPlaying = false
         errorMessage = null
-        pendingSeekMs = positionStore.get(currentItem.id, currentItem.path)
+        pendingSeekMs = if (resumeFromStart) 0L else positionStore.get(currentItem.id, currentItem.path)
         runCatching { activeDataSource?.close() }
         activeDataSource = null
         runCatching {
@@ -1822,7 +2085,8 @@ private fun IjkFallbackPlayerScreen(
             runCatching { activeDataSource?.close() }
             activeDataSource = null
             controlsVisible = true
-            errorMessage = "IJKPlayer 初始化失败：${error.message ?: error.javaClass.simpleName}"
+            errorMessage = "打开失败：${error.message ?: error.javaClass.simpleName}"
+            onAutoRemoveIfMissing(currentItem)
         }
     }
 
@@ -1874,7 +2138,7 @@ private fun IjkFallbackPlayerScreen(
             fitMode = fitMode,
             aspectRatio = aspectMode.ratio ?: sourceAspectRatio
         ) { surfaceModifier ->
-            IjkVideoSurface(player = player, modifier = surfaceModifier)
+            IjkVideoSurface(player = player, rotationDegrees = videoRotation.degrees, modifier = surfaceModifier)
         }
         VideoColorOverlay(
             ambienceMode = ambienceMode,
@@ -1963,7 +2227,13 @@ private fun IjkFallbackPlayerScreen(
             GestureText(text = feedback, modifier = Modifier.align(Alignment.Center))
         }
         errorMessage?.let { message ->
-            GestureText(text = message, modifier = Modifier.align(Alignment.Center))
+            PlayerErrorPanel(
+                message = message,
+                onRetry = ::retryPlayback,
+                onFallbackToExo = { onFallbackToExo() },
+                onRemoveFromLibrary = { onRemoveFromLibrary(currentItem) },
+                modifier = Modifier.align(Alignment.Center)
+            )
         }
         if (locked) {
             LockedOverlay(
@@ -2004,7 +2274,8 @@ private fun IjkFallbackPlayerScreen(
                         moreVisible = !moreVisible
                         settingsVisible = false
                         playlistVisible = false
-                    }
+                    },
+                    onReturnToMultiPlayer = onReturnToMultiPlayer
                 )
                 IjkBottomControls(
                     item = currentItem,
@@ -2052,6 +2323,14 @@ private fun IjkFallbackPlayerScreen(
                         moreVisible = false
                         saveScreenshot()
                     },
+                    onOpenMultiPlayer = if (expanded) {
+                        {
+                            moreVisible = false
+                            onOpenMultiPlayer?.invoke()
+                        }
+                    } else {
+                        null
+                    },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .safeDrawingPadding()
@@ -2077,6 +2356,8 @@ private fun IjkFallbackPlayerScreen(
                     onFitModeChange = { fitMode = it },
                     aspectMode = aspectMode,
                     onAspectModeChange = { aspectMode = it },
+                    videoRotation = videoRotation,
+                    onVideoRotationChange = { videoRotation = it },
                     decodeMode = decodeMode,
                     onDecodeModeChange = { decodeMode = it },
                     soundBoost = soundBoost,
@@ -2161,12 +2442,32 @@ private fun IjkFallbackPlayerScreen(
             }
         }
     }
+    if (showResumeDialog) {
+        AlertDialog(
+            onDismissRequest = { showResumeDialog = false },
+            title = { Text("继续播放？") },
+            text = { Text("上次播放到 ${formatTime(savedPositionMs)}") },
+            confirmButton = {
+                TextButton(onClick = { showResumeDialog = false }) {
+                    Text("继续播放")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    resumeFromStart = true
+                    showResumeDialog = false
+                }) {
+                    Text("从头播放")
+                }
+            }
+        )
+    }
 }
 
 @Composable
-private fun IjkVideoSurface(player: IjkMediaPlayer, modifier: Modifier = Modifier) {
+private fun IjkVideoSurface(player: IjkMediaPlayer, rotationDegrees: Float = 0f, modifier: Modifier = Modifier) {
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.graphicsLayer { rotationZ = rotationDegrees },
         factory = { context ->
             TextureView(context).apply {
                 surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -2420,9 +2721,9 @@ private fun IjkMediaPlayer.configureIjkPlayer() {
 }
 
 @Composable
-private fun PlayerSurface(player: ExoPlayer, modifier: Modifier = Modifier) {
+private fun PlayerSurface(player: ExoPlayer, rotationDegrees: Float = 0f, modifier: Modifier = Modifier) {
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.graphicsLayer { rotationZ = rotationDegrees },
         factory = { context ->
             PlayerView(context).apply {
                 useController = false
@@ -2631,7 +2932,8 @@ private fun PlayerTopBar(
     onSettings: () -> Unit,
     onPlaylist: () -> Unit,
     onLock: () -> Unit,
-    onMore: () -> Unit
+    onMore: () -> Unit,
+    onReturnToMultiPlayer: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
@@ -2663,6 +2965,15 @@ private fun PlayerTopBar(
             }
         }
         Row {
+            if (onReturnToMultiPlayer != null) {
+                IconButton(onClick = onReturnToMultiPlayer) {
+                    Icon(
+                        Icons.Outlined.GridView,
+                        contentDescription = "返回多窗口播放",
+                        tint = PrimaryOrange
+                    )
+                }
+            }
             IconButton(onClick = onPlaylist) {
                 Icon(Icons.Outlined.QueueMusic, contentDescription = "播放列表", tint = Color.White)
             }
@@ -2695,6 +3006,7 @@ private fun PlayerBottomControls(
     speed: Float,
     onCycleSpeed: () -> Unit,
     onToggleFit: () -> Unit,
+    onOpenMultiPlayer: (() -> Unit)? = null,
     expanded: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -2833,6 +3145,13 @@ private fun PlayerBottomControls(
                         prominent = shuffleEnabled,
                         onClick = onToggleShuffle
                     )
+                    if (onOpenMultiPlayer != null) {
+                        PlayerIconButton(
+                            imageVector = Icons.Outlined.GridView,
+                            contentDescription = "多窗口播放",
+                            onClick = onOpenMultiPlayer
+                        )
+                    }
                     SpeedPill("${speed}x", onClick = onCycleSpeed)
                     PlayerIconButton(Icons.Outlined.Fullscreen, "全屏") { onToggleFit() }
                 }
@@ -2955,6 +3274,8 @@ private fun PlaybackSettingsPanel(
     onFitModeChange: (PlayerFitMode) -> Unit,
     aspectMode: PlayerAspectMode,
     onAspectModeChange: (PlayerAspectMode) -> Unit,
+    videoRotation: VideoRotation,
+    onVideoRotationChange: (VideoRotation) -> Unit,
     decodeMode: DecodeMode,
     onDecodeModeChange: (DecodeMode) -> Unit,
     soundBoost: SoundBoostMode,
@@ -3019,6 +3340,14 @@ private fun PlaybackSettingsPanel(
                 selected = aspectMode,
                 label = { it.label },
                 onSelected = onAspectModeChange
+            )
+            EnumOptionSelector(
+                icon = Icons.Outlined.RotateRight,
+                title = "视频旋转",
+                options = VideoRotation.entries,
+                selected = videoRotation,
+                label = { it.label },
+                onSelected = onVideoRotationChange
             )
             EnumOptionSelector(
                 icon = Icons.Outlined.Tv,
@@ -3371,7 +3700,7 @@ private fun formatTime(ms: Long): String {
     }
 }
 
-private fun LibraryItem.playbackMimeType(): String? {
+internal fun LibraryItem.playbackMimeType(): String? {
     val extension = (originalTitle ?: path).substringAfterLast('.', "").lowercase()
     return when (extension) {
         "wmv", "asf" -> "video/x-ms-asf"

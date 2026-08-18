@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.data
+package com.outfuseplayer.data
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -43,15 +43,82 @@ import java.nio.ByteBuffer
 object ThumbnailRepository {
     private const val MAX_EDGE = 360
     private const val REMOTE_THUMBNAIL_IMAGE_BYTES = 32 * 1024 * 1024
+    private const val DISK_CACHE_MAX_BYTES = 160L * 1024 * 1024
+    private const val DISK_CACHE_SWEEP_EVERY = 60
     private val limiter = Semaphore(2)
     private val cache = object : LruCache<String, Bitmap>(24 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
     }
+    // Disk cache for SMB / WebDAV thumbnails so scrolling a large library
+    // doesn't re-fetch remote bytes for every poster.
+    @Volatile
+    private var diskCacheDir: java.io.File? = null
+    private var diskSavesSinceSweep = 0
 
-    suspend fun thumbnail(item: LibraryItem): Bitmap? = thumbnail(context = null, item = item)
+    fun initDiskCache(context: Context) {
+        if (diskCacheDir != null) return
+        diskCacheDir = java.io.File(context.applicationContext.cacheDir, "thumbnails").apply { mkdirs() }
+    }
+
+    private fun diskCacheFile(item: LibraryItem): java.io.File? {
+        val dir = diskCacheDir ?: return null
+        val safeSource = item.sourceId.replace(Regex("""[^A-Za-z0-9._-]"""), "_").take(48)
+        val sub = java.io.File(dir, safeSource).apply { mkdirs() }
+        val name = "${kotlin.math.abs(item.id.hashCode())}_${item.modifiedAt}.jpg"
+        return java.io.File(sub, name)
+    }
+
+    private fun readDiskCache(item: LibraryItem): Bitmap? {
+        val file = diskCacheFile(item) ?: return null
+        if (!file.isFile || file.length() == 0L) return null
+        return runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
+    }
+
+    private fun writeDiskCache(item: LibraryItem, bitmap: Bitmap) {
+        val file = diskCacheFile(item) ?: return
+        runCatching {
+            val out = java.io.FileOutputStream(file)
+            try {
+                val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Bitmap.CompressFormat.WEBP_LOSSY
+                } else {
+                    Bitmap.CompressFormat.JPEG
+                }
+                bitmap.compress(format, 84, out)
+            } finally {
+                out.flush()
+                out.close()
+            }
+        }
+        if (++diskSavesSinceSweep >= DISK_CACHE_SWEEP_EVERY) {
+            diskSavesSinceSweep = 0
+            sweepDiskCache()
+        }
+    }
+
+    private fun sweepDiskCache() {
+        val dir = diskCacheDir ?: return
+        runCatching {
+            val files = dir.listFiles()?.flatMap { it.listFiles()?.toList() ?: emptyList() }.orEmpty()
+            var total = files.sumOf { it.length() }
+            if (total <= DISK_CACHE_MAX_BYTES) return
+            files.sortedBy { it.lastModified() }.forEach { file ->
+                if (total <= DISK_CACHE_MAX_BYTES) return
+                total -= file.length()
+                file.delete()
+            }
+        }
+    }
 
     fun clearMemoryCache() {
         synchronized(cache) { cache.evictAll() }
+    }
+
+    fun clearDiskCache() {
+        diskCacheDir?.listFiles()?.forEach { sub ->
+            sub.listFiles()?.forEach { it.delete() }
+            sub.delete()
+        }
     }
 
     fun decodeImageBytes(bytes: ByteArray, maxEdge: Int = 4096): Bitmap? =
@@ -196,11 +263,23 @@ object ThumbnailRepository {
             cache.get(key)?.let { return@withContext it }
         }
 
+        // Disk cache first (avoids re-fetching remote bytes on every scroll).
+        val fromDisk = readDiskCache(item)
+        if (fromDisk != null) {
+            synchronized(cache) { cache.put(key, fromDisk) }
+            return@withContext fromDisk
+        }
+
         limiter.withPermit {
             synchronized(cache) {
                 cache.get(key)?.let { return@withPermit it }
             }
-            val bitmap = runCatching {
+            val fromDiskAgain = readDiskCache(item)
+            if (fromDiskAgain != null) {
+                synchronized(cache) { cache.put(key, fromDiskAgain) }
+                return@withPermit fromDiskAgain
+            }
+            val loaded = runCatching {
                 val uri = item.streamUrl?.let(Uri::parse) ?: return@runCatching null
                 when {
                     uri.scheme.equals("smb", ignoreCase = true) -> loadSmbThumbnail(item, uri)
@@ -210,8 +289,13 @@ object ThumbnailRepository {
                     context != null -> loadContentVideoFrame(context, uri)
                     else -> null
                 }?.scaleToMaxEdge(MAX_EDGE)
-            }.getOrNull() ?: createFormatCover(item)
+            }.getOrNull()
+            val bitmap = loaded ?: createFormatCover(item)
 
+            // Only real remote thumbnails go to disk (format covers are cheap).
+            if (loaded != null) {
+                writeDiskCache(item, loaded)
+            }
             if (bitmap != null) {
                 synchronized(cache) { cache.put(key, bitmap) }
             }

@@ -1,6 +1,7 @@
 package com.outfuseplayer.data
 
 import android.net.Uri
+import com.outfuseplayer.model.CastMember
 import com.outfuseplayer.model.LibraryItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -139,6 +140,8 @@ class OnlineMetadataRepository {
             year = json.optString("Year").take(4).toIntOrNull() ?: query.year,
             rating = json.optString("imdbRating").takeIf { it.isNotBlank() && it != "N/A" }.orEmpty(),
             genres = json.optString("Genre").split(',').map { it.trim() }.filter { it.isNotBlank() && it != "N/A" },
+            cast = json.optString("Actors").split(',').map { it.trim() }.filter { it.isNotBlank() && it != "N/A" }
+                .map { CastMember(name = it, role = "", imageUrl = null) },
             posterUrl = json.optString("Poster").takeIf { it.startsWith("http", ignoreCase = true) },
             source = "imdb",
             confidence = 0.70f
@@ -215,7 +218,9 @@ class OnlineMetadataRepository {
                 it.overview.isNotBlank() ||
                 it.posterUrl != null ||
                 it.backdropUrl != null ||
-                it.rating.isNotBlank()
+                it.rating.isNotBlank() ||
+                it.genres.isNotEmpty() ||
+                it.cast.isNotEmpty()
         }
 
     private data class MetadataQuery(val title: String, val year: Int?)

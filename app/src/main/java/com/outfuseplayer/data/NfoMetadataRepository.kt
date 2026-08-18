@@ -10,6 +10,7 @@ import com.outfuseplayer.data.remote.WebDavUriScheme
 import com.outfuseplayer.data.smb.SmbCredentialRegistry
 import com.outfuseplayer.data.smb.SmbRepository
 import com.outfuseplayer.data.smb.toRemotePath
+import com.outfuseplayer.model.CastMember
 import com.outfuseplayer.model.LibraryItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,8 +26,11 @@ data class NfoMetadata(
     val year: Int? = null,
     val rating: String = "",
     val genres: List<String> = emptyList(),
+    val cast: List<CastMember> = emptyList(),
     val posterUrl: String? = null,
     val backdropUrl: String? = null,
+    val seasonNumber: Int? = null,
+    val episodeNumber: Int? = null,
     val source: String = "nfo",
     val confidence: Float = 1f
 ) {
@@ -37,8 +41,11 @@ data class NfoMetadata(
         year = year ?: item.year,
         rating = rating.ifBlank { item.rating },
         genres = genres.ifEmpty { item.genres },
+        cast = cast.ifEmpty { item.cast },
         posterUrl = posterUrl ?: item.posterUrl,
-        backdropUrl = backdropUrl ?: posterUrl ?: item.backdropUrl
+        backdropUrl = backdropUrl ?: posterUrl ?: item.backdropUrl,
+        seasonNumber = seasonNumber ?: item.seasonNumber,
+        episodeNumber = episodeNumber ?: item.episodeNumber
     )
 }
 
@@ -89,12 +96,17 @@ class NfoMetadataRepository(context: Context) {
                 .value
                 ?.let { parse(it.toString(Charsets.UTF_8), source = "smb-nfo") }
         } else null
-        val poster = if (settings.scraperLocalArtwork) candidateArtworkPaths(item.path).firstNotNullOfOrNull { candidate ->
+        val poster = if (settings.scraperLocalArtwork) candidatePosterPaths(item.path).firstNotNullOfOrNull { candidate ->
             smbRepository.readBytes(config, candidate.toRemotePath(), maxBytes = MaxArtworkBytes)
                 .value
                 ?.let { cacheArtwork(item, candidate.substringAfterLast('\\').substringAfterLast('/'), it) }
         } else null
-        return parsed.withSidecarArtwork(poster, source = "smb-sidecar")
+        val backdrop = if (settings.scraperLocalArtwork) candidateBackdropPaths(item.path).firstNotNullOfOrNull { candidate ->
+            smbRepository.readBytes(config, candidate.toRemotePath(), maxBytes = MaxArtworkBytes)
+                .value
+                ?.let { cacheArtwork(item, candidate.substringAfterLast('\\').substringAfterLast('/'), it) }
+        } else null
+        return parsed.withSidecarArtwork(poster, backdrop, source = "smb-sidecar")
     }
 
     private suspend fun readWebDavMetadata(item: LibraryItem, uri: Uri, settings: AppSettings): NfoMetadata? {
@@ -104,12 +116,17 @@ class NfoMetadataRepository(context: Context) {
                 .value
                 ?.let { parse(it.toString(Charsets.UTF_8), source = "webdav-nfo") }
         } else null
-        val poster = if (settings.scraperLocalArtwork) candidateArtworkPaths(item.path).firstNotNullOfOrNull { candidate ->
+        val poster = if (settings.scraperLocalArtwork) candidatePosterPaths(item.path).firstNotNullOfOrNull { candidate ->
             webDavRepository.readBytes(config, candidate.replace("\\", "/"), MaxArtworkBytes)
                 .value
                 ?.let { cacheArtwork(item, candidate.substringAfterLast('/'), it) }
         } else null
-        return parsed.withSidecarArtwork(poster, source = "webdav-sidecar")
+        val backdrop = if (settings.scraperLocalArtwork) candidateBackdropPaths(item.path).firstNotNullOfOrNull { candidate ->
+            webDavRepository.readBytes(config, candidate.replace("\\", "/"), MaxArtworkBytes)
+                .value
+                ?.let { cacheArtwork(item, candidate.substringAfterLast('/'), it) }
+        } else null
+        return parsed.withSidecarArtwork(poster, backdrop, source = "webdav-sidecar")
     }
 
     private fun readFileMetadata(item: LibraryItem, settings: AppSettings): NfoMetadata? {
@@ -119,10 +136,13 @@ class NfoMetadataRepository(context: Context) {
                 ?.readBytes()
                 ?.let { parse(it.toString(Charsets.UTF_8), source = "local-nfo") }
         } else null
-        val poster = if (settings.scraperLocalArtwork) candidateArtworkPaths(item.path).firstNotNullOfOrNull { candidate ->
+        val poster = if (settings.scraperLocalArtwork) candidatePosterPaths(item.path).firstNotNullOfOrNull { candidate ->
             File(candidate).takeIf { it.isFile }?.toURI()?.toString()
         } else null
-        return parsed.withSidecarArtwork(poster, source = "local-sidecar")
+        val backdrop = if (settings.scraperLocalArtwork) candidateBackdropPaths(item.path).firstNotNullOfOrNull { candidate ->
+            File(candidate).takeIf { it.isFile }?.toURI()?.toString()
+        } else null
+        return parsed.withSidecarArtwork(poster, backdrop, source = "local-sidecar")
     }
 
     private fun readSafMetadata(item: LibraryItem, documentUri: Uri, settings: AppSettings): NfoMetadata? {
@@ -130,8 +150,9 @@ class NfoMetadataRepository(context: Context) {
             runCatching { DocumentsContract.getTreeDocumentId(documentUri) }.getOrNull().orEmpty()
         )
         val nfoNames = candidateNfoNames(item.originalTitle ?: item.path)
-        val artworkNames = candidateArtworkNames(item.originalTitle ?: item.path)
-        val sidecars = querySafSidecars(documentUri, parentId, nfoNames + artworkNames)
+        val posterNames = candidatePosterNames(item.originalTitle ?: item.path)
+        val backdropNames = candidateBackdropNames(item.originalTitle ?: item.path)
+        val sidecars = querySafSidecars(documentUri, parentId, nfoNames + posterNames + backdropNames)
         val parsed = if (settings.scraperLocalNfo) nfoNames.firstNotNullOfOrNull { name ->
             sidecars[name.lowercase(Locale.US)]?.let { uri ->
                 appContext.contentResolver.openInputStream(uri)?.use { input ->
@@ -140,57 +161,117 @@ class NfoMetadataRepository(context: Context) {
                 }
             }
         } else null
-        val poster = if (settings.scraperLocalArtwork) artworkNames.firstNotNullOfOrNull { name ->
+        val poster = if (settings.scraperLocalArtwork) posterNames.firstNotNullOfOrNull { name ->
             sidecars[name.lowercase(Locale.US)]?.toString()
         } else null
-        return parsed.withSidecarArtwork(poster, source = "saf-sidecar")
+        val backdrop = if (settings.scraperLocalArtwork) backdropNames.firstNotNullOfOrNull { name ->
+            sidecars[name.lowercase(Locale.US)]?.toString()
+        } else null
+        return parsed.withSidecarArtwork(poster, backdrop, source = "saf-sidecar")
     }
 
     private fun parse(raw: String, source: String): NfoMetadata? {
         if (raw.isBlank()) return null
+        // Kodi-style XML NFOs, plus a plain-text fallback for hand-written ones.
+        val xmlResult = runCatching { parseXmlNfo(raw, source) }.getOrNull()
+        if (xmlResult != null) return xmlResult
+        return parsePlainTextNfo(raw, source)
+    }
+
+    private fun parseXmlNfo(raw: String, source: String): NfoMetadata? {
         val parser = Xml.newPullParser()
         parser.setInput(StringReader(raw))
         var tag = ""
         var title = ""
         var originalTitle = ""
         var overview = ""
+        var tagline = ""
         var year: Int? = null
         var rating = ""
+        var seasonNumber: Int? = null
+        var episodeNumber: Int? = null
         var posterUrl: String? = null
         var backdropUrl: String? = null
         val genres = linkedSetOf<String>()
+        val cast = mutableListOf<CastMember>()
+        var inActor = false
+        var actorName = ""
+        var actorRole = ""
+        var actorThumb: String? = null
+
+        fun finishActor() {
+            val cleanName = actorName.trim()
+            if (cleanName.isNotBlank()) {
+                cast += CastMember(
+                    name = cleanName,
+                    role = actorRole.trim(),
+                    imageUrl = actorThumb?.takeIf { it.isNotBlank() }
+                )
+            }
+            actorName = ""
+            actorRole = ""
+            actorThumb = null
+            inActor = false
+        }
 
         while (parser.next() != XmlPullParser.END_DOCUMENT) {
             when (parser.eventType) {
-                XmlPullParser.START_TAG -> tag = parser.name.lowercase()
+                XmlPullParser.START_TAG -> {
+                    tag = parser.name.lowercase()
+                    if (tag == "actor") {
+                        inActor = true
+                        actorName = ""
+                        actorRole = ""
+                        actorThumb = null
+                    }
+                }
                 XmlPullParser.TEXT -> {
                     val text = parser.text.orEmpty().trim()
                     if (text.isNotBlank()) {
-                        when (tag) {
-                            "title" -> if (title.isBlank()) title = text
-                            "originaltitle", "original_title" -> if (originalTitle.isBlank()) originalTitle = text
-                            "plot", "outline", "overview" -> if (overview.isBlank()) overview = text
-                            "year" -> if (year == null) year = text.toIntOrNull()
-                            "premiered", "releasedate", "aired" -> if (year == null) year = Regex("""(?:19|20)\d{2}""").find(text)?.value?.toIntOrNull()
-                            "rating", "userrating" -> if (rating.isBlank()) rating = text
-                            "genre" -> genres += text.split('/', ',', '|').map { it.trim() }.filter { it.isNotBlank() }
-                            "thumb", "poster" -> if (posterUrl.isNullOrBlank() && text.startsWith("http", ignoreCase = true)) posterUrl = text
-                            "fanart", "backdrop" -> if (backdropUrl.isNullOrBlank() && text.startsWith("http", ignoreCase = true)) backdropUrl = text
+                        if (inActor) {
+                            when (tag) {
+                                "actor", "name" -> if (actorName.isBlank()) actorName = text
+                                "role", "character" -> if (actorRole.isBlank()) actorRole = text
+                                "thumb", "image", "profile" -> if (actorThumb.isNullOrBlank() && text.startsWith("http", ignoreCase = true)) actorThumb = text
+                            }
+                        } else {
+                            when (tag) {
+                                "title" -> if (title.isBlank()) title = text
+                                "originaltitle", "original_title" -> if (originalTitle.isBlank()) originalTitle = text
+                                "plot", "outline", "overview" -> if (overview.isBlank()) overview = text
+                                "tagline" -> if (tagline.isBlank()) tagline = text
+                                "year" -> if (year == null) year = text.toIntOrNull()
+                                "premiered", "releasedate", "aired", "dateadded" -> if (year == null) year = Regex("""(?:19|20)\d{2}""").find(text)?.value?.toIntOrNull()
+                                "rating", "userrating" -> if (rating.isBlank()) rating = text
+                                "season", "seasonnumber" -> if (seasonNumber == null) seasonNumber = text.toIntOrNull()
+                                "episode", "episodenumber", "epnum" -> if (episodeNumber == null) episodeNumber = text.toIntOrNull()
+                                "genre", "tag", "category" -> genres += text.split('/', ',', '|').map { it.trim() }.filter { it.isNotBlank() }
+                                "thumb", "poster" -> if (posterUrl.isNullOrBlank() && text.startsWith("http", ignoreCase = true)) posterUrl = text
+                                "fanart", "backdrop" -> if (backdropUrl.isNullOrBlank() && text.startsWith("http", ignoreCase = true)) backdropUrl = text
+                            }
                         }
                     }
                 }
-                XmlPullParser.END_TAG -> tag = ""
+                XmlPullParser.END_TAG -> {
+                    if (parser.name.equals("actor", ignoreCase = true) && inActor) {
+                        finishActor()
+                    }
+                    tag = ""
+                }
             }
         }
         return NfoMetadata(
             title = title,
             originalTitle = originalTitle,
-            overview = overview,
+            overview = overview.ifBlank { tagline },
             year = year,
             rating = rating,
             genres = genres.toList(),
+            cast = cast.distinctBy { it.name.lowercase(Locale.US) },
             posterUrl = posterUrl,
             backdropUrl = backdropUrl,
+            seasonNumber = seasonNumber,
+            episodeNumber = episodeNumber,
             source = source
         ).takeIf {
             it.title.isNotBlank() ||
@@ -199,9 +280,44 @@ class NfoMetadataRepository(context: Context) {
                 it.year != null ||
                 it.rating.isNotBlank() ||
                 it.genres.isNotEmpty() ||
+                it.cast.isNotEmpty() ||
                 it.posterUrl != null ||
-                it.backdropUrl != null
+                it.backdropUrl != null ||
+                it.seasonNumber != null ||
+                it.episodeNumber != null
         }
+    }
+
+    /** Fallback for plain-text NFOs: first meaningful line is the title. */
+    private fun parsePlainTextNfo(raw: String, source: String): NfoMetadata? {
+        val lines = raw.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+        if (lines.isEmpty()) return null
+        val title = lines.firstOrNull { !it.startsWith("http", ignoreCase = true) }?.take(200)
+            ?: return null
+        val year = Regex("""(?:19|20)\d{2}""").find(raw)?.value?.toIntOrNull()
+        val overview = lines.drop(1)
+            .filterNot { it.startsWith("http", ignoreCase = true) }
+            .take(12)
+            .joinToString("\n")
+            .takeIf { it.isNotBlank() }
+        val posterUrl = Regex("""https?://\S+""").findAll(raw)
+            .map { it.value.trimEnd('.', ',', ';', ')') }
+            .firstOrNull { it.contains("poster", ignoreCase = true) || it.contains("thumb", ignoreCase = true) }
+        val backdropUrl = Regex("""https?://\S+""").findAll(raw)
+            .map { it.value.trimEnd('.', ',', ';', ')') }
+            .firstOrNull { it.contains("fanart", ignoreCase = true) || it.contains("backdrop", ignoreCase = true) }
+        return NfoMetadata(
+            title = title,
+            overview = overview.orEmpty(),
+            year = year,
+            posterUrl = posterUrl,
+            backdropUrl = backdropUrl,
+            source = source,
+            confidence = 0.9f
+        )
     }
 
     private fun candidateNfoPaths(path: String): List<String> {
@@ -214,26 +330,18 @@ class NfoMetadataRepository(context: Context) {
             joinPath(parent, "$baseName.nfo", slash),
             joinPath(parent, "movie.nfo", slash),
             joinPath(parent, "tvshow.nfo", slash),
+            joinPath(parent, "episode.nfo", slash),
             joinPath(parent, "metadata.nfo", slash)
         ).distinct()
     }
 
     private fun candidateNfoNames(fileName: String): List<String> {
         val baseName = fileName.substringAfterLast('/').substringAfterLast('\\').substringBeforeLast('.', fileName)
-        return listOf("$baseName.nfo", "movie.nfo", "tvshow.nfo", "metadata.nfo")
+        return listOf("$baseName.nfo", "movie.nfo", "tvshow.nfo", "episode.nfo", "metadata.nfo")
             .distinct()
     }
 
-    private fun candidateArtworkPaths(path: String): List<String> {
-        val normalized = path.trim()
-        val slash = if (normalized.contains("\\")) "\\" else "/"
-        val parent = normalized.substringBeforeLast(slash, missingDelimiterValue = "")
-        return candidateArtworkNames(normalized.substringAfterLast(slash))
-            .map { joinPath(parent, it, slash) }
-            .distinct()
-    }
-
-    private fun candidateArtworkNames(fileName: String): List<String> {
+    private fun candidatePosterNames(fileName: String): List<String> {
         val baseName = fileName.substringAfterLast('/').substringAfterLast('\\').substringBeforeLast('.', fileName)
         val extensions = listOf("jpg", "jpeg", "png", "webp")
         val stems = listOf(
@@ -244,10 +352,47 @@ class NfoMetadataRepository(context: Context) {
             "poster",
             "cover",
             "folder",
-            "fanart",
-            "backdrop"
+            "Poster",
+            "POSTER",
+            "Cover",
+            "Folder",
+            "FOLDER"
         )
         return stems.flatMap { stem -> extensions.map { "$stem.$it" } }.distinct()
+    }
+
+    private fun candidateBackdropNames(fileName: String): List<String> {
+        val baseName = fileName.substringAfterLast('/').substringAfterLast('\\').substringBeforeLast('.', fileName)
+        val extensions = listOf("jpg", "jpeg", "png", "webp")
+        val stems = listOf(
+            "$baseName-fanart",
+            "$baseName-backdrop",
+            "fanart",
+            "backdrop",
+            "Fanart",
+            "FANART",
+            "Backdrop",
+            "BACKDROP"
+        )
+        return stems.flatMap { stem -> extensions.map { "$stem.$it" } }.distinct()
+    }
+
+    private fun candidatePosterPaths(path: String): List<String> {
+        val normalized = path.trim()
+        val slash = if (normalized.contains("\\")) "\\" else "/"
+        val parent = normalized.substringBeforeLast(slash, missingDelimiterValue = "")
+        return candidatePosterNames(normalized.substringAfterLast(slash))
+            .map { joinPath(parent, it, slash) }
+            .distinct()
+    }
+
+    private fun candidateBackdropPaths(path: String): List<String> {
+        val normalized = path.trim()
+        val slash = if (normalized.contains("\\")) "\\" else "/"
+        val parent = normalized.substringBeforeLast(slash, missingDelimiterValue = "")
+        return candidateBackdropNames(normalized.substringAfterLast(slash))
+            .map { joinPath(parent, it, slash) }
+            .distinct()
     }
 
     private fun querySafSidecars(treeUri: Uri, parentId: String, names: List<String>): Map<String, Uri> {
@@ -289,14 +434,18 @@ class NfoMetadataRepository(context: Context) {
         return target.toURI().toString()
     }
 
-    private fun NfoMetadata?.withSidecarArtwork(artworkUrl: String?, source: String): NfoMetadata? =
+    private fun NfoMetadata?.withSidecarArtwork(posterUrl: String?, backdropUrl: String?, source: String): NfoMetadata? =
         when {
-            this != null && artworkUrl != null -> copy(
-                posterUrl = posterUrl ?: artworkUrl,
-                backdropUrl = backdropUrl ?: artworkUrl
+            this != null -> copy(
+                posterUrl = posterUrl ?: this.posterUrl,
+                backdropUrl = backdropUrl ?: this.backdropUrl ?: posterUrl ?: this.posterUrl
             )
-            this != null -> this
-            artworkUrl != null -> NfoMetadata(posterUrl = artworkUrl, backdropUrl = artworkUrl, source = source, confidence = 0.82f)
+            posterUrl != null || backdropUrl != null -> NfoMetadata(
+                posterUrl = posterUrl,
+                backdropUrl = backdropUrl ?: posterUrl,
+                source = source,
+                confidence = 0.82f
+            )
             else -> null
         }
 
@@ -323,6 +472,7 @@ class NfoMetadataRepository(context: Context) {
             year = year,
             rating = rating.takeUnless { it == "-" }.orEmpty(),
             genres = genres,
+            cast = cast,
             posterUrl = posterUrl,
             backdropUrl = backdropUrl,
             source = "media-server",
@@ -332,7 +482,8 @@ class NfoMetadataRepository(context: Context) {
                 it.posterUrl != null ||
                 it.backdropUrl != null ||
                 it.rating.isNotBlank() ||
-                it.genres.isNotEmpty()
+                it.genres.isNotEmpty() ||
+                it.cast.isNotEmpty()
         }
 
     private fun String.parentDocumentId(rootDocumentId: String): String {

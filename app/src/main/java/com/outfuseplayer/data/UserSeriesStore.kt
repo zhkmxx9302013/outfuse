@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.data
+package com.outfuseplayer.data
 
 import android.content.Context
 import org.json.JSONArray
@@ -64,6 +64,14 @@ class UserSeriesStore(context: Context) {
 
     fun rename(series: List<UserSeries>, seriesId: String, name: String): List<UserSeries> =
         series.map { if (it.id == seriesId) it.copy(name = name.ifBlank { it.name }) else it }
+
+    /** Removes deleted item ids from all series and drops series that become empty. */
+    fun removeItems(series: List<UserSeries>, itemIds: Set<String>): List<UserSeries> {
+        if (itemIds.isEmpty()) return series
+        return series
+            .map { it.copy(itemIds = it.itemIds.filterNot { id -> id in itemIds }) }
+            .filterNot { it.itemIds.isEmpty() }
+    }
 
     private companion object {
         const val KEY_SERIES = "series"

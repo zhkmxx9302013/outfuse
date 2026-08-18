@@ -1,6 +1,7 @@
-﻿package com.outfuseplayer.ui.screens
+package com.outfuseplayer.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,7 +29,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
@@ -40,6 +43,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -77,6 +82,7 @@ import com.outfuseplayer.ui.FileActionRequest
 import com.outfuseplayer.ui.FileNameDisplayMode
 import com.outfuseplayer.ui.MediaLayout
 import com.outfuseplayer.ui.MediaSort
+import com.outfuseplayer.ui.icon
 import com.outfuseplayer.ui.MetadataMatchUiState
 import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
@@ -130,7 +136,7 @@ fun LibraryScreen(
     metadataState: MetadataMatchUiState? = null,
     expanded: Boolean,
     title: String = "媒体库",
-    subtitle: String = "按来源、类型和文件系统浏览你的媒体",
+    subtitle: String = "",
     collectionSection: HomeViewAllSection? = null,
     collectionSeriesIds: Set<String> = emptySet(),
     itemsStableForBackgroundRead: Boolean = false,
@@ -138,6 +144,7 @@ fun LibraryScreen(
     onBack: (() -> Unit)? = null,
     onItemClick: (LibraryItem) -> Unit,
     onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit,
+    onOpenMultiPlayer: ((List<LibraryItem>) -> Unit)? = null,
     onRefreshLibrary: ((String?) -> Unit)? = null,
     onRefreshMetadata: ((String?) -> Unit)? = null,
     onCreateSeries: (String, List<LibraryItem>) -> Unit = { _, _ -> },
@@ -257,32 +264,19 @@ fun LibraryScreen(
         LibraryTopBar(
             expanded = expanded,
             stats = stats,
-            selected = filter,
             title = title,
             subtitle = subtitle,
             metadataState = metadataState,
-            onBack = onBack,
-            onSelected = { filterName = it.name }
+            onBack = onBack
         )
-        if (mediaSources.isNotEmpty()) {
-            SourceFilterRow(
-                sources = mediaSources,
-                selectedSourceId = sourceFilterId,
-                expanded = expanded,
-                onSelected = { sourceFilterId = it }
-            )
-        }
-        FilterRow(
-            selected = filter,
-            onSelected = { filterName = it.name },
-            expanded = expanded
-        )
-        LibraryControls(
+        LibraryOptionRow(
+            filter = filter,
+            onFilter = { filterName = it.name },
+            sources = mediaSources,
+            selectedSourceId = sourceFilterId,
+            onSourceSelected = { sourceFilterId = it },
             sort = sort,
             sortAscending = sortAscending,
-            layout = layout,
-            expanded = expanded,
-            hasVideos = playableVideos.isNotEmpty(),
             onSort = { option ->
                 if (sort == option) {
                     sortAscending = !sortAscending
@@ -291,13 +285,22 @@ fun LibraryScreen(
                     sortAscending = true
                 }
             },
+            layout = layout,
             onLayout = { layoutName = it.name },
+            expanded = expanded
+        )
+        LibraryControls(
+            expanded = expanded,
+            hasVideos = playableVideos.isNotEmpty(),
             onPlaySequential = {
                 playableVideos.firstOrNull()?.let { first -> onPlayQueue(first, playableVideos, false) }
             },
             onPlayShuffle = {
                 val shuffled = playableVideos.shuffled()
                 shuffled.firstOrNull()?.let { first -> onPlayQueue(first, shuffled, true) }
+            },
+            onOpenMultiPlayer = onOpenMultiPlayer?.let { open ->
+                { open(playableVideos) }
             },
             selectionMode = selectionMode,
             selectedCount = selectedIds.size,
@@ -408,19 +411,17 @@ private fun LibraryLoadingState(modifier: Modifier = Modifier) {
 private fun LibraryTopBar(
     expanded: Boolean,
     stats: LibraryStats,
-    selected: LibraryFilter,
     title: String,
     subtitle: String,
     metadataState: MetadataMatchUiState?,
-    onBack: (() -> Unit)?,
-    onSelected: (LibraryFilter) -> Unit
+    onBack: (() -> Unit)?
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .safeDrawingPadding()
             .padding(horizontal = if (expanded) 32.dp else 20.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onBack != null) {
@@ -429,36 +430,161 @@ private fun LibraryTopBar(
                 }
             }
             Column {
-                Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    title,
+                    style = if (expanded) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                if (expanded && subtitle.isNotBlank()) {
+                    Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         metadataState?.let { state ->
             MetadataProgressLine(state)
         }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { StatPill("全部", stats.total, selected == LibraryFilter.ALL) { onSelected(LibraryFilter.ALL) } }
-            item { StatPill("文件", stats.files, selected == LibraryFilter.FILES) { onSelected(LibraryFilter.FILES) } }
-            item { StatPill("视频", stats.videos, selected == LibraryFilter.VIDEOS) { onSelected(LibraryFilter.VIDEOS) } }
-            item { StatPill("图片", stats.images, selected == LibraryFilter.IMAGES) { onSelected(LibraryFilter.IMAGES) } }
+        Text(
+            text = buildString {
+                append("共 ${stats.total} 项")
+                if (stats.videos > 0) append(" · 视频 ${stats.videos}")
+                if (stats.images > 0) append(" · 图片 ${stats.images}")
+                if (stats.files > 0) append(" · 文件 ${stats.files}")
+            },
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun OptionDropdown(
+    label: String,
+    options: List<String>,
+    selectedLabel: String,
+    onSelected: (Int) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(7.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Text(
+                label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelLarge
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                Icons.Outlined.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEachIndexed { index, option ->
+                DropdownMenuItem(
+                    text = { Text(option, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        expanded = false
+                        onSelected(index)
+                    },
+                    trailingIcon = {
+                        if (option == selectedLabel) {
+                            Icon(
+                                Icons.Outlined.Check,
+                                contentDescription = null,
+                                tint = PrimaryOrange,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun StatPill(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(7.dp),
-        color = if (selected) PrimaryOrange.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-        border = BorderStroke(1.dp, if (selected) PrimaryOrange.copy(alpha = 0.58f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+private fun LibraryOptionRow(
+    filter: LibraryFilter,
+    onFilter: (LibraryFilter) -> Unit,
+    sources: List<MediaSource>,
+    selectedSourceId: String?,
+    onSourceSelected: (String?) -> Unit,
+    sort: MediaSort,
+    sortAscending: Boolean,
+    onSort: (MediaSort) -> Unit,
+    layout: MediaLayout,
+    onLayout: (MediaLayout) -> Unit,
+    expanded: Boolean
+) {
+    val selectedSourceName = sources.firstOrNull { it.id == selectedSourceId }?.name
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = if (expanded) 32.dp else 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = "$label $count",
-            style = MaterialTheme.typography.labelLarge,
-            color = if (selected) PrimaryOrange else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
-        )
+        item {
+            OptionDropdown(
+                label = "类型：${filter.label}",
+                options = LibraryFilter.entries.map { it.label },
+                selectedLabel = filter.label,
+                onSelected = { index -> onFilter(LibraryFilter.entries[index]) }
+            )
+        }
+        if (sources.isNotEmpty()) {
+            item {
+                OptionDropdown(
+                    label = "来源：${selectedSourceName ?: "全部"}",
+                    options = listOf("全部媒体库") + sources.map { it.name },
+                    selectedLabel = selectedSourceName ?: "全部媒体库",
+                    onSelected = { index ->
+                        onSourceSelected(if (index == 0) null else sources[index - 1].id)
+                    }
+                )
+            }
+        }
+        item {
+            OptionDropdown(
+                label = "排序：${sort.label}${if (sortAscending) " ↑" else " ↓"}",
+                options = MediaSort.entries.map { it.label },
+                selectedLabel = sort.label,
+                onSelected = { index -> onSort(MediaSort.entries[index]) }
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                MediaLayout.entries.forEach { option ->
+                    val active = layout == option
+                    IconButton(
+                        onClick = { onLayout(option) },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .then(
+                                if (active) {
+                                    Modifier.background(PrimaryOrange.copy(alpha = 0.14f), RoundedCornerShape(7.dp))
+                                } else {
+                                    Modifier
+                                }
+                            )
+                    ) {
+                        Icon(
+                            option.icon,
+                            contentDescription = option.label,
+                            tint = if (active) PrimaryOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -490,49 +616,6 @@ private fun MetadataProgressLine(state: MetadataMatchUiState) {
                 text = "${state.current}/${state.total}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun SourceFilterRow(
-    sources: List<MediaSource>,
-    selectedSourceId: String?,
-    expanded: Boolean,
-    onSelected: (String?) -> Unit
-) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = if (expanded) 32.dp else 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.padding(bottom = 8.dp)
-    ) {
-        item {
-            FilterChip(
-                selected = selectedSourceId == null,
-                onClick = { onSelected(null) },
-                label = { Text("全部媒体库") },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
-                    selectedLabelColor = PrimaryOrange
-                )
-            )
-        }
-        items(sources, key = { it.id }) { source ->
-            FilterChip(
-                selected = selectedSourceId == source.id,
-                onClick = { onSelected(source.id) },
-                label = { Text(source.name) },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
-                    selectedLabelColor = PrimaryOrange
-                )
             )
         }
     }
@@ -597,50 +680,12 @@ private fun FileActionDialog(
 }
 
 @Composable
-private fun FilterRow(
-    selected: LibraryFilter,
-    onSelected: (LibraryFilter) -> Unit,
-    expanded: Boolean
-) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = if (expanded) 32.dp else 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.padding(bottom = 8.dp)
-    ) {
-        items(LibraryFilter.entries) { filter ->
-            FilterChip(
-                selected = selected == filter,
-                onClick = { onSelected(filter) },
-                label = { Text(filter.label) },
-                shape = RoundedCornerShape(7.dp),
-                border = FilterChipDefaults.filterChipBorder(
-                    enabled = true,
-                    selected = selected == filter,
-                    borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
-                    selectedBorderColor = PrimaryOrange.copy(alpha = 0.58f)
-                ),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
-                    selectedLabelColor = PrimaryOrange
-                )
-            )
-        }
-    }
-}
-
-@Composable
 private fun LibraryControls(
-    sort: MediaSort,
-    sortAscending: Boolean,
-    layout: MediaLayout,
     expanded: Boolean,
     hasVideos: Boolean,
-    onSort: (MediaSort) -> Unit,
-    onLayout: (MediaLayout) -> Unit,
     onPlaySequential: () -> Unit,
     onPlayShuffle: () -> Unit,
+    onOpenMultiPlayer: (() -> Unit)? = null,
     selectionMode: Boolean,
     selectedCount: Int,
     onToggleSelectionMode: () -> Unit,
@@ -660,7 +705,7 @@ private fun LibraryControls(
                 border = BorderStroke(1.dp, if (selectionMode) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = if (selectionMode) PrimaryOrange else MaterialTheme.colorScheme.onSurface)
             ) {
-                Text(if (selectionMode) "取消多选" else "多选")
+                Text(if (selectionMode) "取消" else "多选")
             }
         }
         if (selectionMode) {
@@ -671,7 +716,7 @@ private fun LibraryControls(
                     shape = RoundedCornerShape(7.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
                 ) {
-                    Text("新建系列 $selectedCount")
+                    Text(if (expanded) "新建系列 $selectedCount" else "系列 $selectedCount")
                 }
             }
         }
@@ -685,7 +730,7 @@ private fun LibraryControls(
             ) {
                 Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("刷新媒体库")
+                Text(if (expanded) "刷新媒体库" else "刷新")
             }
         }
         item {
@@ -698,7 +743,7 @@ private fun LibraryControls(
             ) {
                 Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("刷新元数据")
+                Text(if (expanded) "刷新元数据" else "元数据")
             }
         }
         item {
@@ -710,7 +755,7 @@ private fun LibraryControls(
             ) {
                 Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("顺序播放")
+                Text(if (expanded) "顺序播放" else "顺序")
             }
         }
         item {
@@ -723,37 +768,23 @@ private fun LibraryControls(
             ) {
                 Icon(Icons.Outlined.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("随机播放")
+                Text(if (expanded) "随机播放" else "随机")
             }
         }
-        items(MediaSort.entries) { option ->
-            FilterChip(
-                selected = sort == option,
-                onClick = { onSort(option) },
-                label = { Text(if (sort == option) "${option.label} ${if (sortAscending) "↑" else "↓"}" else option.label) },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.66f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
-                    selectedLabelColor = PrimaryOrange
-                )
-            )
-        }
-        items(MediaLayout.entries) { option ->
-            FilterChip(
-                selected = layout == option,
-                onClick = { onLayout(option) },
-                leadingIcon = { Icon(option.icon, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                label = { Text(option.label) },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.66f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
-                    selectedLabelColor = PrimaryOrange
-                )
-            )
+        if (onOpenMultiPlayer != null) {
+            item {
+                OutlinedButton(
+                    enabled = hasVideos,
+                    onClick = onOpenMultiPlayer,
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.62f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryOrange)
+                ) {
+                    Icon(Icons.Outlined.GridView, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (expanded) "多窗口播放" else "多窗口")
+                }
+            }
         }
     }
 }
@@ -1153,12 +1184,5 @@ private fun navigationLabels(items: List<LibraryItem>, sort: MediaSort, ascendin
 
 private inline fun <reified T : Enum<T>> enumValueOrDefault(name: String, fallback: T): T =
     runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
-
-private val MediaLayout.icon: ImageVector
-    get() = when (this) {
-        MediaLayout.LIST -> Icons.Outlined.ViewAgenda
-        MediaLayout.LARGE -> Icons.Outlined.ViewComfy
-        MediaLayout.SMALL -> Icons.Outlined.GridView
-    }
 
 

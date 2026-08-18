@@ -113,7 +113,8 @@ fun SearchScreen(
             item.title.contains(normalized, ignoreCase = true) ||
                 item.originalTitle?.contains(normalized, ignoreCase = true) == true ||
                 item.path.contains(normalized, ignoreCase = true) ||
-                item.genres.any { it.contains(normalized, ignoreCase = true) }
+                item.genres.any { it.contains(normalized, ignoreCase = true) } ||
+                item.cast.any { it.name.contains(normalized, ignoreCase = true) || it.role.contains(normalized, ignoreCase = true) }
         }
     }
     val results = matched.filter { item ->

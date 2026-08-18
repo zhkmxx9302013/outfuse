@@ -99,7 +99,7 @@ private val zhCnStrings = UiStrings(
         subtitle = "来源配置、削刮和常用操作指南",
         quickStartTitle = "快速开始",
         quickStartParagraphs = listOf(
-            "1. 进入“来源”，点击右上角 +，选择本机目录、SMB、WebDAV、Jellyfin、Emby、百度网盘或阿里网盘。",
+            "1. 进入“来源”，点击右上角 +，选择本机目录、SMB、WebDAV、123网盘、Jellyfin、Emby、百度网盘或阿里网盘。",
             "2. 连接成功后选择“保存来源”或“保存并扫描”，App 会把视频和图片加入媒体库。",
             "3. 在媒体库顶部选择来源、类型和排序；刷新媒体库或刷新元数据时，会优先作用于当前选中的来源。",
             "4. 点开视频或图片后，右上角更多菜单可查看文件位置并跳转到来源目录。"
@@ -109,6 +109,7 @@ private val zhCnStrings = UiStrings(
             "本机目录：选择“本机目录”后使用系统文件夹选择器授权。建议选择具体媒体根目录，App 会递归扫描子文件夹。",
             "SMB / NAS：填写服务器 IP 或域名、端口、共享名、路径、域、用户名和密码。共享名是 smb://server/share 中的 share。",
             "WebDAV：填写 https:// 或 http:// 开头的服务地址、起始路径、账号和密码。常见 NAS、云盘 WebDAV 插件都可使用。",
+            "123网盘：选择 123网盘，地址可用 https://webdav.123pan.cn/webdav 或授权页提供的 https://webdav-账号ID.pd1.123pan.cn/webdav；用户名填写登录账号，密码填写 WebDAV 授权管理生成的应用密码。",
             "Jellyfin / Emby：填写服务器地址、用户名和密码；也可以直接填写 API Key / Access Token。连接后会读取服务器已有封面、简介和直连播放地址。",
             "百度网盘：选择百度网盘，填写开放平台应用的 Client ID、Client Secret、回调地址，点击“网页登录授权”。也可手动填写 Access Token。",
             "阿里网盘/PDS：填写 PDS API 域名，例如 https://{domainId}.api.aliyunpds.com，填写 Client ID、回调地址，并在 Drive ID 中保存授权后返回或手动填写的 drive_id。"
@@ -285,7 +286,7 @@ private val enUsStrings = UiStrings(
         subtitle = "Sources, scraping, and common operations",
         quickStartTitle = "Quick Start",
         quickStartParagraphs = listOf(
-            "1. Open Sources, tap +, then choose a local folder, SMB, WebDAV, Jellyfin, Emby, Baidu Netdisk, or Aliyun Drive.",
+            "1. Open Sources, tap +, then choose a local folder, SMB, WebDAV, 123Pan, Jellyfin, Emby, Baidu Netdisk, or Aliyun Drive.",
             "2. After a successful connection, choose Save Source or Save and Scan. Outfuse will add videos and images to the library.",
             "3. Use the library header to filter by source, type, and sort order. Library and metadata refreshes prefer the currently selected source.",
             "4. While viewing a video or image, use the top-right menu to reveal the file location and jump back to its source folder."
@@ -295,6 +296,7 @@ private val enUsStrings = UiStrings(
             "Local folder: choose Local Folder and grant access with the system picker. Pick the media root folder so subfolders can be scanned recursively.",
             "SMB / NAS: enter server IP or domain, port, share name, path, domain, username, and password. The share name is the share part of smb://server/share.",
             "WebDAV: enter a service URL starting with https:// or http://, a start path, account, and password. NAS and cloud-drive WebDAV plugins are supported.",
+            "123Pan: choose 123Pan, use https://webdav.123pan.cn/webdav or the account-specific https://webdav-{account id}.pd1.123pan.cn/webdav URL from the authorization page, then enter your login account and the generated WebDAV app password.",
             "Jellyfin / Emby: enter server URL plus username and password, or an API key / access token. Outfuse reads existing posters, overviews, and direct play URLs.",
             "Baidu Netdisk: choose Baidu Netdisk, fill Client ID, Client Secret, and Redirect URI from the open platform, then tap Web Login. Access Token can also be entered manually.",
             "Aliyun Drive / PDS: enter a PDS API domain such as https://{domainId}.api.aliyunpds.com, fill Client ID and Redirect URI, and save the returned or manually entered drive_id in Drive ID."

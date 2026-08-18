@@ -1,6 +1,7 @@
 package com.outfuseplayer.data.remote
 
 import android.net.Uri
+import com.outfuseplayer.model.SourceType
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -53,6 +54,22 @@ internal fun HttpURLConnection.readCappedBytes(maxBytes: Int): ByteArray {
 
 internal fun RemoteSourceConfig.withValidatedBaseUrl(): RemoteSourceConfig =
     copy(baseUrl = validateRemoteBaseUrl(baseUrl))
+
+internal fun RemoteSourceConfig.withWebDavProviderDefaults(): RemoteSourceConfig {
+    val checked = withValidatedBaseUrl()
+    if (checked.type != SourceType.PAN_123) return checked
+    val uri = Uri.parse(checked.normalizedBaseUrl())
+    val host = uri.host.orEmpty()
+    val path = uri.path.orEmpty().trim('/')
+    val looksLike123Pan = host.equals("webdav.123pan.cn", ignoreCase = true) ||
+        host.endsWith(".123pan.cn", ignoreCase = true)
+    val hasWebDavRoot = path.split('/').any { it.equals("webdav", ignoreCase = true) }
+    if (!looksLike123Pan || hasWebDavRoot) return checked
+    val nextPath = uri.encodedPath.orEmpty().trimEnd('/').let { current ->
+        if (current.isBlank()) "/webdav" else "$current/webdav"
+    }
+    return checked.copy(baseUrl = uri.buildUpon().encodedPath(nextPath).build().toString().trimEnd('/'))
+}
 
 internal fun validateRemoteBaseUrl(raw: String): String {
     val trimmed = raw.trim().trimEnd('/')

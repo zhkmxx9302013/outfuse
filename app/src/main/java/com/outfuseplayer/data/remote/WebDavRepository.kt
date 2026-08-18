@@ -20,8 +20,8 @@ class WebDavRepository {
     suspend fun testConnection(config: RemoteSourceConfig): RemoteActionResult<RemoteSourceConfig> =
         withContext(Dispatchers.IO) {
             runCatching {
-                require(config.type == SourceType.WEBDAV) { "请选择 WebDAV 来源类型" }
-                val checked = config.withValidatedBaseUrl()
+                require(config.type == SourceType.WEBDAV || config.type == SourceType.PAN_123) { "请选择 WebDAV 或 123网盘 来源类型" }
+                val checked = config.withWebDavProviderDefaults()
                 propfind(checked, checked.path, depth = 0)
                 RemoteSourceRegistry.register(checked)
                 checked
@@ -34,13 +34,13 @@ class WebDavRepository {
     suspend fun list(config: RemoteSourceConfig, path: String = config.path): RemoteActionResult<List<RemoteEntry>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val checked = config.withValidatedBaseUrl()
+                val checked = config.withWebDavProviderDefaults()
                 propfind(checked, path, depth = 1)
                     .filterNot { it.path.trim('/') == path.trim('/') }
                     .sortedWith(compareByDescending<RemoteEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
             }.fold(
                 onSuccess = {
-                    RemoteSourceRegistry.register(config.withValidatedBaseUrl())
+                    RemoteSourceRegistry.register(config.withWebDavProviderDefaults())
                     RemoteActionResult(true, "已打开 ${path.ifBlank { "/" }}，共 ${it.size} 个条目", it)
                 },
                 onFailure = { RemoteActionResult(false, it.toRemoteFriendlyMessage()) }
@@ -66,7 +66,7 @@ class WebDavRepository {
 
         return try {
             withContext(Dispatchers.IO) {
-                val checked = config.withValidatedBaseUrl()
+                val checked = config.withWebDavProviderDefaults()
                 val pending = ArrayDeque<String>()
                 pending += checked.path.trim('/')
                 while (pending.isNotEmpty()) {
@@ -89,7 +89,7 @@ class WebDavRepository {
                 }
                 flush()
             }
-            RemoteSourceRegistry.register(config.withValidatedBaseUrl())
+            RemoteSourceRegistry.register(config.withWebDavProviderDefaults())
             RemoteActionResult(true, "WebDAV 扫描完成：$mediaFound 个媒体", mediaFound)
         } catch (error: Throwable) {
             RemoteActionResult(false, error.toRemoteFriendlyMessage())
@@ -99,7 +99,7 @@ class WebDavRepository {
     suspend fun readBytes(config: RemoteSourceConfig, path: String, maxBytes: Int): RemoteActionResult<ByteArray> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val checked = config.withValidatedBaseUrl()
+                val checked = config.withWebDavProviderDefaults()
                 val connection = URL(checked.resolveWebUrl(path)).openConfiguredConnection(headers = checked.authHeaders())
                 connection.readCappedBytes(maxBytes)
             }.fold(
@@ -111,7 +111,7 @@ class WebDavRepository {
     suspend fun exists(config: RemoteSourceConfig, path: String): RemoteActionResult<Boolean> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val checked = config.withValidatedBaseUrl()
+                val checked = config.withWebDavProviderDefaults()
                 val connection = URL(checked.resolveWebUrl(path)).openConfiguredConnection(
                     method = "HEAD",
                     headers = checked.authHeaders()
@@ -141,7 +141,7 @@ class WebDavRepository {
         withContext(Dispatchers.IO) {
             runCatching {
                 require(newName.isNotBlank()) { "请输入新名称" }
-                val checked = config.withValidatedBaseUrl()
+                val checked = config.withWebDavProviderDefaults()
                 val targetPath = path.parentWebDavPath()
                     .let { parent -> if (parent.isBlank()) newName.trim() else "$parent/${newName.trim()}" }
                 val connection = URL(checked.resolveWebUrl(path)).openConnection() as HttpURLConnection
@@ -161,7 +161,7 @@ class WebDavRepository {
         withContext(Dispatchers.IO) {
             runCatching {
                 require(targetDirectory.isNotBlank()) { "请输入目标文件夹路径" }
-                val checked = config.withValidatedBaseUrl()
+                val checked = config.withWebDavProviderDefaults()
                 val fileName = path.trim('/').substringAfterLast('/')
                 val targetPath = "${targetDirectory.trim('/')}/$fileName".trim('/')
                 val connection = URL(checked.resolveWebUrl(path)).openConnection() as HttpURLConnection
@@ -180,7 +180,7 @@ class WebDavRepository {
     suspend fun download(config: RemoteSourceConfig, path: String, targetDirectory: File): RemoteActionResult<File> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val checked = config.withValidatedBaseUrl()
+                val checked = config.withWebDavProviderDefaults()
                 targetDirectory.mkdirs()
                 val fileName = path.trim('/').substringAfterLast('/').ifBlank { "webdav-download" }
                 val target = File(targetDirectory, fileName)
@@ -198,7 +198,7 @@ class WebDavRepository {
 
     fun streamHeaders(config: RemoteSourceConfig): Map<String, String> = config.authHeaders()
 
-    fun streamUrl(config: RemoteSourceConfig, path: String): String = config.withValidatedBaseUrl().resolveWebUrl(path)
+    fun streamUrl(config: RemoteSourceConfig, path: String): String = config.withWebDavProviderDefaults().resolveWebUrl(path)
 
     private fun propfind(config: RemoteSourceConfig, path: String, depth: Int): List<RemoteEntry> {
         var lastError = ""
@@ -261,7 +261,7 @@ class WebDavRepository {
         buildResult: () -> RemoteActionResult<T>
     ): RemoteActionResult<T> = withContext(Dispatchers.IO) {
         runCatching {
-            val checked = config.withValidatedBaseUrl()
+            val checked = config.withWebDavProviderDefaults()
             val connection = URL(checked.resolveWebUrl(path)).openConnection() as HttpURLConnection
             connection.setRequestMethodCompat(method)
             connection.applyHeaders(checked.authHeaders())

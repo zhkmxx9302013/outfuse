@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.data.smb
+package com.outfuseplayer.data.smb
 
 import android.net.Uri
 import com.outfuseplayer.model.LibraryItem
@@ -88,6 +88,19 @@ object SmbCredentialRegistry {
     fun register(config: SmbConfig) {
         configs[key(config.server, config.share, config.port)] = config
         configsBySourceId[config.sourceId] = config
+    }
+
+    fun unregister(sourceId: String) {
+        val removed = configsBySourceId.remove(sourceId) ?: return
+        configs.remove(key(removed.server, removed.share, removed.port))
+    }
+
+    fun unregister(uri: Uri) {
+        val server = uri.host ?: return
+        val share = uri.pathSegments.firstOrNull() ?: return
+        val port = if (uri.port > 0) uri.port else 445
+        val removed = configs.remove(key(server, share, port)) ?: return
+        configsBySourceId.remove(removed.sourceId)
     }
 
     fun find(sourceId: String): SmbConfig? = configsBySourceId[sourceId]

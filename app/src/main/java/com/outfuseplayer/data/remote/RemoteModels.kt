@@ -37,7 +37,7 @@ data class RemoteSourceConfig(
                 .trim('-')
                 .take(72)
             val account = when (type) {
-                SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> userId.ifBlank { username }.ifBlank { name }
+                SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE, SourceType.PAN_123 -> userId.ifBlank { username }.ifBlank { name }
                 else -> ""
             }
                 .lowercase(Locale.US)
@@ -70,6 +70,7 @@ data class RemoteSourceConfig(
                 SourceType.EMBY -> "Emby"
                 SourceType.BAIDU_NETDISK -> "百度网盘"
                 SourceType.ALIYUN_DRIVE -> "阿里网盘"
+                SourceType.PAN_123 -> "123网盘"
                 else -> type.name
             }
         },
@@ -98,6 +99,10 @@ object RemoteSourceRegistry {
         configs.forEach(::register)
     }
 
+    fun unregister(sourceId: String) {
+        configs.remove(sourceId)
+    }
+
     fun find(sourceId: String): RemoteSourceConfig? = configs[sourceId]
 
     fun find(uri: Uri): RemoteSourceConfig? = uri.host?.let(::find)
@@ -116,7 +121,7 @@ fun RemoteSourceConfig.toLibraryItem(entry: RemoteEntry): LibraryItem {
     val isImage = fileName.isImageFileName() || entry.mimeType?.startsWith("image/", ignoreCase = true) == true
     val typeLabel = if (isImage) "图片" else "视频"
     val stream = when (type) {
-        SourceType.WEBDAV -> toWebDavUri(entry.path)
+        SourceType.WEBDAV, SourceType.PAN_123 -> toWebDavUri(entry.path)
         SourceType.JELLYFIN, SourceType.EMBY -> entry.extra["streamUrl"] ?: entry.extra["imageUrl"]
         SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> entry.extra["streamUrl"] ?: entry.extra["downloadUrl"] ?: entry.extra["imageUrl"]
         else -> null

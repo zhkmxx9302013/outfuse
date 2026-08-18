@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.ui
+package com.outfuseplayer.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
@@ -46,6 +46,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.content.Context
 import android.net.Uri
@@ -69,9 +71,12 @@ import com.outfuseplayer.data.MediaSourceStore
 import com.outfuseplayer.data.NfoMetadataRepository
 import com.outfuseplayer.data.PlaybackPositionStore
 import com.outfuseplayer.data.SettingsStore
+import com.outfuseplayer.data.SourceBrowserViewStateStore
+import com.outfuseplayer.data.ThumbnailRepository
 import com.outfuseplayer.data.UserSeries
 import com.outfuseplayer.data.UserSeriesStore
 import com.outfuseplayer.data.smb.SmbConfig
+import com.outfuseplayer.data.smb.SmbConfigJsonStore
 import com.outfuseplayer.data.smb.SmbConfigStore
 import com.outfuseplayer.data.smb.SmbCredentialRegistry
 import com.outfuseplayer.data.smb.SmbRepository
@@ -103,6 +108,7 @@ import com.outfuseplayer.ui.screens.homeSectionItems
 import com.outfuseplayer.ui.screens.homeSectionPreview
 import com.outfuseplayer.ui.screens.ImageViewerScreen
 import com.outfuseplayer.ui.screens.LibraryScreen
+import com.outfuseplayer.ui.screens.MultiPlayerScreen
 import com.outfuseplayer.ui.screens.PlayerScreen
 import com.outfuseplayer.ui.screens.SearchScreen
 import com.outfuseplayer.ui.screens.SettingsScreen
@@ -118,16 +124,22 @@ import com.outfuseplayer.ui.theme.TextMuted
 import com.outfuseplayer.ui.theme.OutfuseTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import android.widget.Toast
 
 private enum class RootDestination(
     val icon: ImageVector
@@ -176,6 +188,7 @@ private fun SourceType.remoteTypeLabel(): String = when (this) {
     SourceType.EMBY -> "Emby"
     SourceType.BAIDU_NETDISK -> "百度网盘"
     SourceType.ALIYUN_DRIVE -> "阿里网盘"
+    SourceType.PAN_123 -> "123网盘"
     else -> name
 }
 
@@ -223,6 +236,7 @@ private fun OutfuseAppContent(
     val configuration = LocalConfiguration.current
     val expanded = configuration.screenWidthDp >= 720
     val scope = rememberCoroutineScope()
+    remember { ThumbnailRepository.initDiskCache(context) }
     val runtimePrefs = remember {
         context.applicationContext.getSharedPreferences(RuntimePrefsName, Context.MODE_PRIVATE)
     }
@@ -231,8 +245,10 @@ private fun OutfuseAppContent(
     val mediaLibraryStore = remember { MediaLibraryStore(context) }
     val mediaSourceStore = remember { MediaSourceStore(context) }
     val smbConfigStore = remember { SmbConfigStore(context) }
+    val smbConfigJsonStore = remember { SmbConfigJsonStore(context) }
     val smbScanIndexStore = remember { SmbScanIndexStore(context) }
     val remoteConfigStore = remember { RemoteConfigStore(context) }
+    val sourceBrowserViewStateStore = remember { SourceBrowserViewStateStore(context) }
     val smbRepository = remember { SmbRepository() }
     val webDavRepository = remember { WebDavRepository() }
     val jellyfinRepository = remember { JellyfinRepository() }
@@ -255,6 +271,16 @@ private fun OutfuseAppContent(
     var sourceScanState by remember { mutableStateOf<SourceScanUiState?>(null) }
     var metadataState by remember { mutableStateOf<MetadataMatchUiState?>(null) }
     var libraryNotice by remember { mutableStateOf<String?>(null) }
+    // Throttles full-library JSON persistence during batch scans so huge
+    // imports (200k+ items) don't rewrite the file on every batch.
+    var lastMediaPersistAt by remember { mutableLongStateOf(0L) }
+    // Deduplicates in-flight "playback file missing" existence checks.
+    val pendingAutoRemoveChecks = remember { mutableSetOf<String>() }
+    // Multi-window playback session (tablet / landscape only).
+    var multiPlayerQueue by remember { mutableStateOf<List<LibraryItem>?>(null) }
+    // Keeps the multi-window session alive while a single video is fullscreened
+    // from it, so the player shows a floating button to return to the grid.
+    var returnToMultiPlayerQueue by remember { mutableStateOf<List<LibraryItem>?>(null) }
     var sourceRevealItem by remember { mutableStateOf<LibraryItem?>(null) }
     var startupDataRestored by remember { mutableStateOf(false) }
     var interruptedScanSourceIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -266,15 +292,35 @@ private fun OutfuseAppContent(
     }
     var scanJob by remember { mutableStateOf<Job?>(null) }
     val libraryItems = remember { mutableStateListOf<LibraryItem>() }
-    val libraryItemIndex = remember { mutableMapOf<String, Int>() }
+    val libraryItemIndex = remember { ConcurrentHashMap<String, Int>() }
+    val libraryItemIndexById = remember { ConcurrentHashMap<String, Int>() }
     val mediaSources = remember { mutableStateListOf<com.outfuseplayer.model.MediaSource>() }
+    // Serializes every mutation of libraryItems + its indexes. Batch scans may
+    // merge on background threads (source-page flows) while other coroutines
+    // merge on the main thread; without a lock the key/id indexes desync and
+    // the same item gets appended repeatedly, which both duplicates entries
+    // and balloons memory until an OOM.
+    // Must be remembered: a plain `Any()` here would be recreated on every
+    // recomposition, so coroutines started before a recomposition would hold a
+    // different lock than later mutations, breaking mutual exclusion entirely.
+    val libraryLock = remember { Any() }
+
+    /** True when an entry with this source id + path is already in the library.
+     *  The underlying index is concurrent-safe, so this can be called from
+     *  composition for the "已入库" badge without locking. */
+    fun isEntryInLibrary(sourceId: String, path: String): Boolean =
+        libraryItemIndex.containsKey("$sourceId\u0000$path")
 
     fun libraryKey(item: LibraryItem): String = "${item.sourceId}\u0000${item.path}"
 
     fun rebuildLibraryIndex() {
-        libraryItemIndex.clear()
-        libraryItems.forEachIndexed { index, item ->
-            libraryItemIndex[libraryKey(item)] = index
+        synchronized(libraryLock) {
+            libraryItemIndex.clear()
+            libraryItemIndexById.clear()
+            libraryItems.forEachIndexed { index, item ->
+                libraryItemIndex[libraryKey(item)] = index
+                libraryItemIndexById[item.id] = index
+            }
         }
     }
 
@@ -284,31 +330,76 @@ private fun OutfuseAppContent(
         backdropUrl = backdropUrl ?: existing.backdropUrl,
         rating = rating.takeUnless { it == "-" } ?: existing.rating,
         overview = overview.ifBlank { existing.overview },
-        genres = genres.ifEmpty { existing.genres }
+        genres = genres.ifEmpty { existing.genres },
+        cast = cast.ifEmpty { existing.cast }
     )
 
     fun mergeMediaItems(discovered: List<LibraryItem>): LibraryDelta {
         if (discovered.isEmpty()) return LibraryDelta()
-        if (libraryItemIndex.size != libraryItems.size) rebuildLibraryIndex()
-        var added = 0
-        var updated = 0
-        discovered.forEach { item ->
-            val key = libraryKey(item)
-            val existingIndex = libraryItemIndex[key]
-            if (existingIndex != null && existingIndex in 0 until libraryItems.size) {
-                val existing = libraryItems[existingIndex]
-                val next = item.withPreservedUserState(existing)
-                if (next != existing) {
-                    libraryItems[existingIndex] = next
-                    updated++
-                }
-            } else {
-                libraryItemIndex[key] = libraryItems.size
-                libraryItems += item
-                added++
+        synchronized(libraryLock) {
+            if (libraryItemIndex.size != libraryItems.size || libraryItemIndexById.size != libraryItems.size) {
+                rebuildLibraryIndex()
             }
+            var added = 0
+            var updated = 0
+            discovered.forEach { item ->
+                val key = libraryKey(item)
+                val existingIndex = libraryItemIndex[key]
+                if (existingIndex != null && existingIndex in 0 until libraryItems.size) {
+                    val existing = libraryItems[existingIndex]
+                    val next = item.withPreservedUserState(existing)
+                    if (next != existing) {
+                        libraryItems[existingIndex] = next
+                        updated++
+                    }
+                } else {
+                    // The same id may reappear with a different path (e.g. a
+                    // rescanned local file). Replace it instead of appending a
+                    // duplicate entry.
+                    val byIdIndex = libraryItemIndexById[item.id]
+                    if (byIdIndex != null && byIdIndex in 0 until libraryItems.size) {
+                        val previous = libraryItems[byIdIndex]
+                        if (previous.id == item.id) {
+                            libraryItemIndex.remove(libraryKey(previous))
+                            libraryItems[byIdIndex] = item.withPreservedUserState(previous)
+                            libraryItemIndex[key] = byIdIndex
+                            updated++
+                            return@forEach
+                        }
+                    }
+                    libraryItemIndex[key] = libraryItems.size
+                    libraryItemIndexById[item.id] = libraryItems.size
+                    libraryItems += item
+                    added++
+                }
+            }
+            return LibraryDelta(added = added, updated = updated)
         }
-        return LibraryDelta(added = added, updated = updated)
+    }
+
+    /** Removes duplicate entries (same key or same id) left behind by older
+     *  builds or interrupted sessions, then returns the number removed. */
+    suspend fun deduplicateLibrary(): Int = withContext(Dispatchers.Default) {
+        synchronized(libraryLock) {
+            if (libraryItems.size < 2) return@withContext 0
+            val seenKeys = HashSet<String>(libraryItems.size)
+            val seenIds = HashSet<String>(libraryItems.size)
+            val retained = ArrayList<LibraryItem>(libraryItems.size)
+            var removed = 0
+            libraryItems.forEach { item ->
+                val key = libraryKey(item)
+                if (seenKeys.add(key) && seenIds.add(item.id)) {
+                    retained += item
+                } else {
+                    removed++
+                }
+            }
+            if (removed == 0) return@withContext 0
+            libraryItems.clear()
+            libraryItems += retained
+            rebuildLibraryIndex()
+            removed
+        }
     }
 
     fun LibraryItem.isInsideScanScope(config: SmbConfig): Boolean {
@@ -343,27 +434,31 @@ private fun OutfuseAppContent(
         scannedPaths: Set<String>,
         unchangedDirectoryRoots: Set<String>
     ): LibraryDelta {
-        if (libraryItems.none { it.isInsideScanScope(config) }) return LibraryDelta()
-        val before = libraryItems.size
-        libraryItems.removeAll { item ->
-            item.isInsideScanScope(config) &&
-                !item.isInsideAnyDirectory(unchangedDirectoryRoots) &&
-                item.path !in scannedPaths
+        synchronized(libraryLock) {
+            if (libraryItems.none { it.isInsideScanScope(config) }) return LibraryDelta()
+            val before = libraryItems.size
+            libraryItems.removeAll { item ->
+                item.isInsideScanScope(config) &&
+                    !item.isInsideAnyDirectory(unchangedDirectoryRoots) &&
+                    item.path !in scannedPaths
+            }
+            val removed = before - libraryItems.size
+            if (removed > 0) rebuildLibraryIndex()
+            return LibraryDelta(removed = removed)
         }
-        val removed = before - libraryItems.size
-        if (removed > 0) rebuildLibraryIndex()
-        return LibraryDelta(removed = removed)
     }
 
     fun removeMissingItemsFromSource(sourceId: String, scannedPaths: Set<String>): LibraryDelta {
-        if (libraryItems.none { it.sourceId == sourceId }) return LibraryDelta()
-        val before = libraryItems.size
-        libraryItems.removeAll { item ->
-            item.sourceId == sourceId && item.path !in scannedPaths
+        synchronized(libraryLock) {
+            if (libraryItems.none { it.sourceId == sourceId }) return LibraryDelta()
+            val before = libraryItems.size
+            libraryItems.removeAll { item ->
+                item.sourceId == sourceId && item.path !in scannedPaths
+            }
+            val removed = before - libraryItems.size
+            if (removed > 0) rebuildLibraryIndex()
+            return LibraryDelta(removed = removed)
         }
-        val removed = before - libraryItems.size
-        if (removed > 0) rebuildLibraryIndex()
-        return LibraryDelta(removed = removed)
     }
 
     fun LibraryDelta.toScanChangeText(): String =
@@ -405,16 +500,22 @@ private fun OutfuseAppContent(
     }
 
     fun persistLibrarySnapshot() {
-        val snapshot = libraryItems.toList()
         val version = librarySaveVersion.incrementAndGet()
         scope.launch {
+            // Snapshot off the main thread so a huge library (200k+ items)
+            // never stalls the UI while copying the list for saving.
+            val snapshot = withContext(Dispatchers.Default) {
+                synchronized(libraryLock) { libraryItems.toList() }
+            }
             saveLibrarySnapshot(snapshot, version)
         }
     }
 
     suspend fun persistLibrarySnapshotNow() {
-        val snapshot = libraryItems.toList()
         val version = librarySaveVersion.incrementAndGet()
+        val snapshot = withContext(Dispatchers.Default) {
+            synchronized(libraryLock) { libraryItems.toList() }
+        }
         saveLibrarySnapshot(snapshot, version)
     }
 
@@ -468,12 +569,14 @@ private fun OutfuseAppContent(
     }
 
     fun restoreScanScopeFromSnapshot(config: SmbConfig, snapshot: List<LibraryItem>) {
-        val retainedCurrentItems = libraryItems.filterNot { it.isInsideScanScope(config) }
-        val previousScopedItems = snapshot.filter { it.isInsideScanScope(config) }
-        libraryItems.clear()
-        libraryItems += retainedCurrentItems
-        libraryItems += previousScopedItems
-        rebuildLibraryIndex()
+        synchronized(libraryLock) {
+            val retainedCurrentItems = libraryItems.filterNot { it.isInsideScanScope(config) }
+            val previousScopedItems = snapshot.filter { it.isInsideScanScope(config) }
+            libraryItems.clear()
+            libraryItems += retainedCurrentItems
+            libraryItems += previousScopedItems
+            rebuildLibraryIndex()
+        }
     }
 
     fun SmbScanProgress.toUiState(running: Boolean = !completed): SourceScanUiState = SourceScanUiState(
@@ -523,9 +626,10 @@ private fun OutfuseAppContent(
             val scannedPaths = LinkedHashSet<String>()
             val unchangedDirectoryRoots = LinkedHashSet<String>()
             var scannedDelta = LibraryDelta()
+            var lastPersistAt = System.currentTimeMillis()
             val result = smbRepository.scanMediaIncremental(
                 config = config,
-                batchSize = 160,
+                batchSize = 800,
                 knownDirectorySignatures = if (forceFullScan) emptyMap() else directorySignatures,
                 onProgress = { progress ->
                     withContext(Dispatchers.Main) {
@@ -548,6 +652,13 @@ private fun OutfuseAppContent(
                     withContext(Dispatchers.Main) {
                         batch.forEach { scannedPaths += it.path }
                         scannedDelta += mergeMediaItems(batch)
+                        // Persist progress periodically so an interrupted scan
+                        // (crash / kill) keeps already imported items.
+                        val now = System.currentTimeMillis()
+                        if (now - lastPersistAt > 15_000) {
+                            lastPersistAt = now
+                            persistLibrarySnapshot()
+                        }
                     }
                 },
                 onDirectoryFingerprint = { path, signature ->
@@ -578,12 +689,13 @@ private fun OutfuseAppContent(
                 }
             )
             withContext(Dispatchers.Main) {
+                val skippedCount = result.value?.skippedDirectories ?: 0
                 val finalDelta = if (result.success) {
-                    if ((result.value?.skippedDirectories ?: 0) > 0) {
-                        scannedDelta
-                    } else {
-                        reconcileCompletedScan(config, scannedPaths, unchangedDirectoryRoots, scannedDelta)
-                    }
+                    // Missing files are always reconciled after a scan. Directories
+                    // that could not be read are protected from removal via
+                    // unchangedDirectoryRoots, so a partially accessible share can
+                    // never wipe items that were merely out of reach.
+                    reconcileCompletedScan(config, scannedPaths, unchangedDirectoryRoots, scannedDelta)
                 } else {
                     restoreScanScopeFromSnapshot(config, scanStartSnapshot)
                     LibraryDelta()
@@ -593,8 +705,8 @@ private fun OutfuseAppContent(
                 } else {
                     result.message
                 }
-                val skippedSafetyNote = if (result.success && (result.value?.skippedDirectories ?: 0) > 0) {
-                    " · 有目录不可访问，已暂缓删除缺失条目"
+                val skippedSafetyNote = if (result.success && skippedCount > 0) {
+                    " · $skippedCount 个目录不可访问，其内条目已保留"
                 } else {
                     ""
                 }
@@ -641,13 +753,15 @@ private fun OutfuseAppContent(
     }
 
     fun removeItemFromLibrary(item: LibraryItem) {
-        val index = libraryItemIndex[libraryKey(item)]
-        if (index != null && index in 0 until libraryItems.size) {
-            libraryItems.removeAt(index)
-            rebuildLibraryIndex()
-        } else {
-            libraryItems.removeAll { it.sourceId == item.sourceId && it.path == item.path }
-            rebuildLibraryIndex()
+        synchronized(libraryLock) {
+            val index = libraryItemIndex[libraryKey(item)]
+            if (index != null && index in 0 until libraryItems.size) {
+                libraryItems.removeAt(index)
+                rebuildLibraryIndex()
+            } else {
+                libraryItems.removeAll { it.sourceId == item.sourceId && it.path == item.path }
+                rebuildLibraryIndex()
+            }
         }
         persistLibrarySnapshot()
     }
@@ -655,15 +769,78 @@ private fun OutfuseAppContent(
     fun removeItemsFromLibrary(sourceId: String, paths: Collection<String>): Int {
         if (paths.isEmpty()) return 0
         val normalizedPaths = paths.toSet()
-        val before = libraryItems.size
-        libraryItems.removeAll { it.sourceId == sourceId && it.path in normalizedPaths }
-        val removed = before - libraryItems.size
+        var removed = 0
+        synchronized(libraryLock) {
+            val before = libraryItems.size
+            libraryItems.removeAll { it.sourceId == sourceId && it.path in normalizedPaths }
+            removed = before - libraryItems.size
+            if (removed > 0) rebuildLibraryIndex()
+        }
         if (removed > 0) {
-            rebuildLibraryIndex()
             persistLibrarySnapshot()
             libraryNotice = "已同步移除 $removed 个不存在的媒体条目"
         }
         return removed
+    }
+
+    /**
+     * Deletes a source and every piece of related state: persisted configs,
+     * in-memory registries, scan index, browser view state, playback positions,
+     * user series references and all library items belonging to the source.
+     */
+    fun deleteSource(sourceId: String) {
+        if (sourceId == "local") return
+        val source = mediaSources.firstOrNull { it.id == sourceId }
+        val removedItemIds = libraryItems
+            .asSequence()
+            .filter { it.sourceId == sourceId }
+            .mapTo(mutableSetOf()) { it.id }
+
+        mediaSources.removeAll { it.id == sourceId }
+        smbConfigStore.clearIfMatches(sourceId)
+        smbConfigJsonStore.delete(sourceId)
+        remoteConfigStore.delete(sourceId)
+        smbScanIndexStore.delete(sourceId)
+        sourceBrowserViewStateStore.delete(sourceId)
+        SmbCredentialRegistry.unregister(sourceId)
+        RemoteSourceRegistry.unregister(sourceId)
+
+        if (source?.type == SourceType.LOCAL) {
+            source.baseUri?.let { uriString ->
+                val uri = runCatching { Uri.parse(uriString) }.getOrNull()
+                if (uri != null && uri.scheme.equals("content", ignoreCase = true) && uri.toString().contains("/tree/")) {
+                    runCatching {
+                        context.contentResolver.releasePersistableUriPermission(
+                            uri,
+                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    }
+                }
+            }
+        }
+
+        playbackPositionStore.removeForItems(removedItemIds)
+        if (removedItemIds.isNotEmpty()) {
+            if (lastPlayedId in removedItemIds) lastPlayedId = null
+            if (userSeries.any { it.itemIds.any { id -> id in removedItemIds } }) {
+                userSeries = userSeriesStore.removeItems(userSeries, removedItemIds)
+                scope.launch(Dispatchers.IO) { userSeriesStore.save(userSeries) }
+            }
+        }
+
+        persistSourceSnapshot()
+        scope.launch {
+            val retained = withContext(Dispatchers.Default) {
+                synchronized(libraryLock) { libraryItems.toList().filterNot { it.sourceId == sourceId } }
+            }
+            synchronized(libraryLock) {
+                libraryItems.clear()
+                libraryItems += retained
+                rebuildLibraryIndex()
+            }
+            persistLibrarySnapshot()
+            libraryNotice = "已删除来源，并同步清理其媒体库与配置。"
+        }
     }
 
     suspend fun LibraryItem.existsAtSource(): Boolean? = withContext(Dispatchers.IO) {
@@ -701,27 +878,93 @@ private fun OutfuseAppContent(
         }
     }
 
+    /**
+     * Called when playback of an item fails. Verifies whether the file really
+     * no longer exists at its source and, if so, removes it from the library
+     * and shows a toast. Items that still exist (transient network/NAS errors)
+     * are left untouched.
+     */
+    fun autoRemoveMissingPlaybackItem(item: LibraryItem) {
+        // Guard against duplicate in-flight checks (a failing item can surface
+        // the same error through multiple kernels / retries at once).
+        if (!pendingAutoRemoveChecks.add(item.id)) return
+        scope.launch {
+            val exists = item.existsAtSource()
+            pendingAutoRemoveChecks.remove(item.id)
+            if (exists == false) {
+                removeItemFromLibrary(item)
+                if (playerId == item.id) playerId = null
+                if (detailId == item.id) detailId = null
+                Toast.makeText(
+                    context.applicationContext,
+                    "「${item.title}」文件已不存在，已从媒体库移除",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    /**
+     * Checks whether this item's existence can actually be verified right now.
+     * Items whose source credentials are not loaded are skipped instead of
+     * being probed anonymously (which would fail and hammer the network).
+     */
+    fun LibraryItem.isQuickSyncVerifiable(): Boolean {
+        val uri = streamUrl?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return false
+        return when {
+            uri.scheme.equals("smb", ignoreCase = true) -> SmbCredentialRegistry.find(uri) != null
+            uri.scheme.equals(WebDavUriScheme, ignoreCase = true) -> RemoteSourceRegistry.find(uri) != null
+            else -> true
+        }
+    }
+
     fun syncDeletedFilesQuick(sourceId: String? = null) {
         if (!appSettings.quickSyncDeletedFiles) return
+        // Bound every run so a huge library (200k+ items) never triggers an
+        // unbounded network sweep on each app launch or refresh.
+        val maxChecks = 1500
         val snapshot = libraryItems
+            .asSequence()
             .filter { it.streamUrl != null && (sourceId == null || it.sourceId == sourceId) }
+            .filter { it.isQuickSyncVerifiable() }
+            .take(maxChecks)
+            .toList()
             .takeIf { it.isNotEmpty() }
             ?: run {
-                libraryNotice = "当前没有可校验的媒体条目。"
+                if (libraryItems.none { it.streamUrl != null && (sourceId == null || it.sourceId == sourceId) }) {
+                    libraryNotice = "当前没有可校验的媒体条目。"
+                }
                 return
             }
         scope.launch {
-            libraryNotice = "正在快速同步已删除文件：0/${snapshot.size}"
+            libraryNotice = "正在同步已删除文件：0/${snapshot.size}"
             val missingBySource = linkedMapOf<String, MutableList<String>>()
+            val semaphore = Semaphore(4)
             var checked = 0
-            snapshot.forEach { item ->
-                val exists = item.existsAtSource()
-                if (exists == false) {
-                    missingBySource.getOrPut(item.sourceId) { mutableListOf() } += item.path
+            var lastNoticeAt = System.currentTimeMillis()
+
+            suspend fun report(force: Boolean) {
+                val now = System.currentTimeMillis()
+                if (force || now - lastNoticeAt > 1200) {
+                    lastNoticeAt = now
+                    libraryNotice = "正在同步已删除文件：$checked/${snapshot.size}，发现 ${missingBySource.values.sumOf { it.size }} 个缺失"
                 }
-                checked++
-                if (checked == snapshot.size || checked % 80 == 0) {
-                    libraryNotice = "正在快速同步已删除文件：$checked/${snapshot.size}，发现 ${missingBySource.values.sumOf { it.size }} 个缺失"
+            }
+
+            coroutineScope {
+                val jobs = snapshot.map { item ->
+                    async(Dispatchers.IO) {
+                        yield()
+                        semaphore.withPermit { item to item.existsAtSource() }
+                    }
+                }
+                jobs.forEach { job ->
+                    val (item, exists) = job.await()
+                    if (exists == false) {
+                        missingBySource.getOrPut(item.sourceId) { mutableListOf() } += item.path
+                    }
+                    checked++
+                    report(checked == snapshot.size)
                 }
             }
             var removed = 0
@@ -787,11 +1030,11 @@ private fun OutfuseAppContent(
             val scannedPaths = LinkedHashSet<String>()
             var scannedDelta = LibraryDelta()
             val result: RemoteActionResult<Int> = when (config.type) {
-                SourceType.WEBDAV -> webDavRepository.scanMedia(
+                SourceType.WEBDAV, SourceType.PAN_123 -> webDavRepository.scanMedia(
                     config = config,
                     onProgress = { scanned, pending, found, current ->
                         withContext(Dispatchers.Main) {
-                            libraryNotice = "正在刷新 ${config.name.ifBlank { "WebDAV" }}：$found 个媒体 · $scanned 个目录 · 待扫描 $pending · $current"
+                            libraryNotice = "正在刷新 ${config.name.ifBlank { config.type.remoteTypeLabel() }}：$found 个媒体 · $scanned 个目录 · 待扫描 $pending · $current"
                         }
                     },
                     onBatch = { batch ->
@@ -856,17 +1099,62 @@ private fun OutfuseAppContent(
         scope.launch {
             libraryNotice = "正在刷新 ${source.name}"
             putSource(source.copy(health = SourceHealth.SYNCING, detail = "正在扫描本机目录"))
-            val items = withContext(Dispatchers.IO) {
-                val baseUri = source.baseUri.orEmpty()
-                if (source.id == LocalMediaRepository.LOCAL_SOURCE_ID || !baseUri.contains("/tree/")) {
-                    localMediaRepository.scan()
-                } else {
-                    localMediaRepository.scanTree(Uri.parse(baseUri), source.id, source.name)
+            val baseUri = source.baseUri.orEmpty()
+            val treeUri = if (source.id != LocalMediaRepository.LOCAL_SOURCE_ID && baseUri.contains("/tree/")) {
+                runCatching { Uri.parse(baseUri) }.getOrNull()
+            } else {
+                null
+            }
+            val scannedPaths = LinkedHashSet<String>()
+            var addedCount = 0
+            var updatedCount = 0
+            var batchCount = 0
+            var lastPersistAt = System.currentTimeMillis()
+
+            suspend fun handleBatch(batch: List<LibraryItem>) = withContext(Dispatchers.Main) {
+                batch.forEach { scannedPaths += it.path }
+                val delta = mergeMediaItems(batch)
+                addedCount += delta.added
+                updatedCount += delta.updated
+                batchCount++
+                // Persist progress periodically so a crash mid-scan keeps the
+                // items already imported instead of losing the whole library.
+                val now = System.currentTimeMillis()
+                if (now - lastPersistAt > 15_000) {
+                    lastPersistAt = now
+                    persistLibrarySnapshot()
+                    putSource(
+                        source.copy(
+                            health = SourceHealth.SYNCING,
+                            detail = "正在扫描：已整理 ${addedCount + updatedCount} 项媒体"
+                        )
+                    )
                 }
             }
-            val delta = reconcileCompletedSourceScan(source.id, items)
-            val videos = items.count { it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
-            val images = items.count { it.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE }
+
+            val scanned = try {
+                withContext(Dispatchers.IO) {
+                    if (treeUri != null) {
+                        localMediaRepository.scanTreeBatched(treeUri, source.id, source.name, onBatch = ::handleBatch)
+                    } else {
+                        localMediaRepository.scanBatched(onBatch = ::handleBatch)
+                    }
+                }
+            } catch (error: Throwable) {
+                -1
+            }
+
+            if (scanned < 0) {
+                putSource(source.copy(health = SourceHealth.OFFLINE, detail = "扫描失败，已保留上一次媒体库。"))
+                persistSourceSnapshot()
+                libraryNotice = "${source.name} 扫描失败，已保留上一次媒体库。"
+                return@launch
+            }
+
+            val removedDelta = removeMissingItemsFromSource(source.id, scannedPaths)
+            val videos = libraryItems.count { it.sourceId == source.id && it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
+            val images = libraryItems.count { it.sourceId == source.id && it.itemType == com.outfuseplayer.model.LibraryItemType.IMAGE }
+            val delta = LibraryDelta(added = addedCount, updated = updatedCount, removed = removedDelta.removed)
             putSource(source.copy(health = SourceHealth.ONLINE, detail = "$videos 个视频 · $images 张图片 · ${delta.toScanChangeText()}"))
             persistSourceSnapshot()
             persistLibrarySnapshotNow()
@@ -876,6 +1164,7 @@ private fun OutfuseAppContent(
 
     fun smbConfigForSource(sourceId: String): SmbConfig? {
         SmbCredentialRegistry.find(sourceId)?.let { return it }
+        smbConfigJsonStore.find(sourceId)?.let { return it }
         return smbConfigStore.takeIf { it.hasSaved() }
             ?.loadLast()
             ?.takeIf { it.sourceId == sourceId }
@@ -909,7 +1198,7 @@ private fun OutfuseAppContent(
                         startBackgroundScan(config, forceFullScan = forceRepairScan)
                     }
                 }
-                SourceType.WEBDAV, SourceType.JELLYFIN, SourceType.EMBY, SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> {
+                SourceType.WEBDAV, SourceType.PAN_123, SourceType.JELLYFIN, SourceType.EMBY, SourceType.BAIDU_NETDISK, SourceType.ALIYUN_DRIVE -> {
                     val config = remoteConfigStore.find(source.id)
                     if (config == null) {
                         libraryNotice = "${source.name} 缺少来源配置，请在来源页编辑后保存。"
@@ -1023,10 +1312,15 @@ private fun OutfuseAppContent(
                 .forEach(::putSource)
             val remoteConfigs = withContext(Dispatchers.IO) { remoteConfigStore.loadAll() }
             RemoteSourceRegistry.registerAll(remoteConfigs)
+            val persistedSmbConfigs = withContext(Dispatchers.IO) { smbConfigJsonStore.loadAll() }
+            persistedSmbConfigs.forEach { SmbCredentialRegistry.register(it) }
             if (smbConfigStore.hasSaved()) {
                 val config = smbConfigStore.loadLast()
                 savedSmbConfig = config
                 SmbCredentialRegistry.register(config)
+                if (persistedSmbConfigs.none { it.sourceId == config.sourceId }) {
+                    smbConfigJsonStore.save(config)
+                }
                 val restoredSource = mediaSources.firstOrNull { it.id == config.sourceId && it.type == SourceType.SMB }
                 val source = restoredSource?.copy(
                     name = config.name,
@@ -1044,6 +1338,27 @@ private fun OutfuseAppContent(
                     detail = "已保存来源"
                 )
                 putSource(source)
+            }
+            if (persistedSmbConfigs.any { it.sourceId != savedSmbConfig?.sourceId }) {
+                persistedSmbConfigs
+                    .filter { it.sourceId != savedSmbConfig?.sourceId }
+                    .forEach { config ->
+                        val existing = mediaSources.firstOrNull { it.id == config.sourceId }
+                        if (existing == null) {
+                            putSource(
+                                MediaSource(
+                                    id = config.sourceId,
+                                    type = SourceType.SMB,
+                                    name = config.name,
+                                    baseUri = config.displayUri(),
+                                    credentialsRef = "private-shared-preferences",
+                                    enabled = true,
+                                    health = SourceHealth.ONLINE,
+                                    detail = "已保存来源"
+                                )
+                            )
+                        }
+                    }
             }
             var loadedMediaCount = 0
             var repairedStreamUrls = false
@@ -1078,6 +1393,13 @@ private fun OutfuseAppContent(
                 }
             }
             rebuildLibraryIndex()
+            // Clean duplicates left behind by older builds or interrupted
+            // scans before the quick-sync pass runs.
+            val removedDuplicates = deduplicateLibrary()
+            if (removedDuplicates > 0) {
+                persistLibrarySnapshot()
+                libraryNotice = "已清理 $removedDuplicates 个重复媒体条目"
+            }
             if (appSettings.quickSyncDeletedFiles && loadedMediaCount > 0) {
                 syncDeletedFilesQuick()
             }
@@ -1089,8 +1411,11 @@ private fun OutfuseAppContent(
     }
 
     val selectedRoot = RootDestination.valueOf(root)
-    val detailItem = libraryItems.firstOrNull { it.id == detailId }
-    val playerItem = libraryItems.firstOrNull { it.id == playerId }
+    // Guard the lookups: with a huge library, scanning the whole list for a
+    // null id on every recomposition (which happens per scan batch) is very
+    // expensive. Only iterate when a route is actually open.
+    val detailItem = detailId?.let { id -> libraryItems.firstOrNull { it.id == id } }
+    val playerItem = playerId?.let { id -> libraryItems.firstOrNull { it.id == id } }
     val appBackgroundBrush = if (appSettings.darkTheme) AppBackgroundBrush else LightAppBackgroundBrush
     val fileNameMode = enumValueOrDefault(appSettings.fileNameDisplayMode, FileNameDisplayMode.ELLIPSIS)
 
@@ -1105,6 +1430,36 @@ private fun OutfuseAppContent(
         root = RootDestination.SOURCES.name
     }
 
+    // Multi-window playback: only available on tablets / landscape (expanded).
+    multiPlayerQueue?.let { queue ->
+        if (queue.isNotEmpty() && expanded) {
+            MultiPlayerScreen(
+                items = queue,
+                expanded = true,
+                onCloseItem = { item ->
+                    val next = queue.filterNot { it.id == item.id }
+                    multiPlayerQueue = next.ifEmpty { null }
+                },
+                onFullscreen = { item, fullscreenQueue ->
+                    // Exit multi-window and open the single player with the
+                    // full multi-window playlist as its queue (no pool limit).
+                    // Keep the session so the player can return to the grid.
+                    multiPlayerQueue = null
+                    playQueue = fullscreenQueue
+                    startShuffle = false
+                    returnToSourceBrowserOnPlayerClose = false
+                    returnToMultiPlayerQueue = fullscreenQueue
+                    playerId = item.id
+                },
+                onAutoRemoveIfMissing = ::autoRemoveMissingPlaybackItem,
+                onBack = { multiPlayerQueue = null }
+            )
+            return
+        } else {
+            multiPlayerQueue = null
+        }
+    }
+
     if (playerItem != null) {
         LaunchedEffect(playerItem.id) {
             runtimePrefs.edit().putBoolean(RuntimeKeyPlayerActive, true).apply()
@@ -1116,6 +1471,7 @@ private fun OutfuseAppContent(
             lastPlayedId = closingItem.id
             playerId = null
             returnToSourceBrowserOnPlayerClose = false
+            returnToMultiPlayerQueue = null
             if (shouldReturnToSourceBrowser) {
                 detailId = null
                 homeBrowseSection = null
@@ -1131,6 +1487,7 @@ private fun OutfuseAppContent(
                 slideshowIntervalSeconds = appSettings.imageSlideshowIntervalSeconds,
                 onAddToSeries = ::addToSeries,
                 onShowFileLocation = ::showFileLocation,
+                onAutoRemoveIfMissing = ::autoRemoveMissingPlaybackItem,
                 onBack = ::closePlayer
             )
         } else {
@@ -1140,6 +1497,19 @@ private fun OutfuseAppContent(
                 expanded = expanded,
                 startShuffle = startShuffle,
                 onShowFileLocation = ::showFileLocation,
+                onRemoveFromLibrary = { item ->
+                    removeItemFromLibrary(item)
+                    libraryNotice = "已从媒体库移除“${item.title}”"
+                },
+                onAutoRemoveIfMissing = ::autoRemoveMissingPlaybackItem,
+                onOpenMultiPlayer = { queue -> multiPlayerQueue = queue },
+                onReturnToMultiPlayer = returnToMultiPlayerQueue?.let { queue ->
+                    {
+                        multiPlayerQueue = queue
+                        returnToMultiPlayerQueue = null
+                        playerId = null
+                    }
+                },
                 onBack = ::closePlayer
             )
         }
@@ -1219,6 +1589,9 @@ private fun OutfuseAppContent(
                     startupDataRestored = startupDataRestored,
                     expanded = true,
                     onOpenSources = { openRoot(RootDestination.SOURCES) },
+                    onOpenSearch = { openRoot(RootDestination.SEARCH) },
+                    isEntryInLibrary = ::isEntryInLibrary,
+                    onOpenMultiPlayer = { queue -> multiPlayerQueue = queue },
                     onOpenDetail = onOpenDetail,
                     onBackFromDetail = { detailId = null },
                     onPlay = onPlay,
@@ -1232,34 +1605,27 @@ private fun OutfuseAppContent(
                         homeBrowseSection = null
                     },
                     onSourceAdded = { source -> upsertSource(source) },
-                    onSourceDeleted = { sourceId ->
-                        mediaSources.removeAll { it.id == sourceId && it.id != "local" }
-                        remoteConfigStore.delete(sourceId)
-                        persistSourceSnapshot()
-                        scope.launch {
-                            val retained = withContext(Dispatchers.Default) {
-                                libraryItems.toList().filterNot { it.sourceId == sourceId }
-                            }
-                            libraryItems.clear()
-                            libraryItems += retained
-                            rebuildLibraryIndex()
-                            persistLibrarySnapshot()
-                        }
-                    },
+                    onSourceDeleted = ::deleteSource,
                     onStartSourceScan = { config -> startBackgroundScan(config, forceFullScan = shouldRunRepairScan(config)) },
                     onRefreshLibrary = ::refreshCurrentLibrary,
                     onRefreshMetadata = ::refreshMetadata,
                     onFileAction = ::handleFileAction,
                     onMediaDiscovered = { discovered ->
                         mergeMediaItems(discovered)
-                        persistLibrarySnapshot()
+                        val now = System.currentTimeMillis()
+                        if (now - lastMediaPersistAt > 15_000) {
+                            lastMediaPersistAt = now
+                            persistLibrarySnapshot()
+                        }
                     },
                     onMediaRemoved = ::removeItemsFromLibrary,
                     onSourceRevealHandled = { sourceRevealItem = null },
                     onOpenSourceMedia = onOpenSourceMedia,
                     onMediaScanCompleted = { sourceId, scannedItems ->
-                        val delta = reconcileCompletedSourceScan(sourceId, scannedItems)
-                        libraryNotice = "媒体库增量更新完成：${delta.toScanChangeText()}"
+                        if (scannedItems.isNotEmpty()) {
+                            val delta = reconcileCompletedSourceScan(sourceId, scannedItems)
+                            libraryNotice = "媒体库增量更新完成：${delta.toScanChangeText()}"
+                        }
                         persistLibrarySnapshot()
                     }
                 )
@@ -1302,6 +1668,9 @@ private fun OutfuseAppContent(
                     startupDataRestored = startupDataRestored,
                     expanded = false,
                     onOpenSources = { openRoot(RootDestination.SOURCES) },
+                    onOpenSearch = { openRoot(RootDestination.SEARCH) },
+                    isEntryInLibrary = ::isEntryInLibrary,
+                    onOpenMultiPlayer = { queue -> multiPlayerQueue = queue },
                     onOpenDetail = onOpenDetail,
                     onBackFromDetail = { detailId = null },
                     onPlay = onPlay,
@@ -1315,34 +1684,27 @@ private fun OutfuseAppContent(
                         homeBrowseSection = null
                     },
                     onSourceAdded = { source -> upsertSource(source) },
-                    onSourceDeleted = { sourceId ->
-                        mediaSources.removeAll { it.id == sourceId && it.id != "local" }
-                        remoteConfigStore.delete(sourceId)
-                        persistSourceSnapshot()
-                        scope.launch {
-                            val retained = withContext(Dispatchers.Default) {
-                                libraryItems.toList().filterNot { it.sourceId == sourceId }
-                            }
-                            libraryItems.clear()
-                            libraryItems += retained
-                            rebuildLibraryIndex()
-                            persistLibrarySnapshot()
-                        }
-                    },
+                    onSourceDeleted = ::deleteSource,
                     onStartSourceScan = { config -> startBackgroundScan(config, forceFullScan = shouldRunRepairScan(config)) },
                     onRefreshLibrary = ::refreshCurrentLibrary,
                     onRefreshMetadata = ::refreshMetadata,
                     onFileAction = ::handleFileAction,
                     onMediaDiscovered = { discovered ->
                         mergeMediaItems(discovered)
-                        persistLibrarySnapshot()
+                        val now = System.currentTimeMillis()
+                        if (now - lastMediaPersistAt > 15_000) {
+                            lastMediaPersistAt = now
+                            persistLibrarySnapshot()
+                        }
                     },
                     onMediaRemoved = ::removeItemsFromLibrary,
                     onSourceRevealHandled = { sourceRevealItem = null },
                     onOpenSourceMedia = onOpenSourceMedia,
                     onMediaScanCompleted = { sourceId, scannedItems ->
-                        val delta = reconcileCompletedSourceScan(sourceId, scannedItems)
-                        libraryNotice = "媒体库增量更新完成：${delta.toScanChangeText()}"
+                        if (scannedItems.isNotEmpty()) {
+                            val delta = reconcileCompletedSourceScan(sourceId, scannedItems)
+                            libraryNotice = "媒体库增量更新完成：${delta.toScanChangeText()}"
+                        }
                         persistLibrarySnapshot()
                     }
                 )
@@ -1368,6 +1730,9 @@ private fun AppContent(
     startupDataRestored: Boolean,
     expanded: Boolean,
     onOpenSources: () -> Unit,
+    onOpenSearch: () -> Unit,
+    isEntryInLibrary: (String, String) -> Boolean,
+    onOpenMultiPlayer: (List<LibraryItem>) -> Unit,
     onOpenDetail: (LibraryItem) -> Unit,
     onBackFromDetail: () -> Unit,
     onPlay: (LibraryItem) -> Unit,
@@ -1452,25 +1817,51 @@ private fun AppContent(
                 )
                 return
             }
-            val playable = libraryItems.filter { it.streamUrl != null && it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE }
-            val featuredItem = playable.firstOrNull { it.id == lastPlayedId }
-                ?: playable.firstOrNull { it.progress > 0f }
-                ?: playable.firstOrNull()
-                ?: libraryItems.first()
+            // Early-exit lookups instead of filtering the whole library on
+            // every recomposition (a huge library makes a full filter costly
+            // during batch scans).
+            fun LibraryItem.isFeaturedCandidate(): Boolean =
+                streamUrl != null && itemType != com.outfuseplayer.model.LibraryItemType.IMAGE
+            val featuredItem = lastPlayedId?.let { id -> libraryItems.firstOrNull { it.id == id && it.isFeaturedCandidate() } }
+                ?: libraryItems.firstOrNull { it.progress > 0f && it.isFeaturedCandidate() }
+                ?: libraryItems.firstOrNull { it.isFeaturedCandidate() }
+                ?: libraryItems.firstOrNull()
+                ?: com.outfuseplayer.model.LibraryItem(
+                    id = "empty",
+                    sourceId = "",
+                    path = "",
+                    itemType = com.outfuseplayer.model.LibraryItemType.VIDEO_FILE,
+                    title = "",
+                    originalTitle = null,
+                    year = null,
+                    durationLabel = "",
+                    posterUrl = null,
+                    backdropUrl = null,
+                    overview = "",
+                    rating = "-",
+                    progress = 0f
+                )
+            // Home rails only depend on the library size, so cache them across
+            // the per-batch recompositions that happen during scans.
+            val homeContinueWatching = remember(libraryItems.size) { libraryItems.homeSectionPreview(HomeViewAllSection.CONTINUE_WATCHING) }
+            val homeRecent = remember(libraryItems.size) { libraryItems.homeSectionPreview(HomeViewAllSection.RECENT) }
+            val homeMovies = remember(libraryItems.size) { libraryItems.homeSectionPreview(HomeViewAllSection.MOVIES) }
+            val homeShows = remember(libraryItems.size) { libraryItems.homeSectionPreview(HomeViewAllSection.SHOWS) }
             HomeScreen(
                 featured = featuredItem,
                 allItems = libraryItems,
                 sources = mediaSources,
                 series = userSeries,
-                continueWatching = libraryItems.homeSectionPreview(HomeViewAllSection.CONTINUE_WATCHING),
-                recent = libraryItems.homeSectionPreview(HomeViewAllSection.RECENT),
-                movies = libraryItems.homeSectionPreview(HomeViewAllSection.MOVIES),
-                shows = libraryItems.homeSectionPreview(HomeViewAllSection.SHOWS),
+                continueWatching = homeContinueWatching,
+                recent = homeRecent,
+                movies = homeMovies,
+                shows = homeShows,
                 expanded = expanded,
                 fileNameMode = fileNameMode,
                 onItemClick = onOpenDetail,
                 onPlay = onPlay,
-                onViewAll = onHomeViewAll
+                onViewAll = onHomeViewAll,
+                onSearch = onOpenSearch
             )
         }
 
@@ -1483,6 +1874,11 @@ private fun AppContent(
             fileNameMode = fileNameMode,
             onItemClick = onOpenDetail,
             onPlayQueue = onPlayQueue,
+            onOpenMultiPlayer = if (expanded) {
+                { pool -> onOpenMultiPlayer(pool) }
+            } else {
+                null
+            },
             onRefreshLibrary = onRefreshLibrary,
             onRefreshMetadata = onRefreshMetadata,
             onCreateSeries = onCreateSeries,
@@ -1501,6 +1897,7 @@ private fun AppContent(
             scanState = sourceScanState,
             revealItem = sourceRevealItem,
             fileNameMode = fileNameMode,
+            isEntryInLibrary = isEntryInLibrary,
             onRevealHandled = onSourceRevealHandled,
             onSourceAdded = onSourceAdded,
             onSourceDeleted = onSourceDeleted,
@@ -1948,7 +2345,14 @@ private fun AppBottomBar(
                 selected = item == selectedRoot,
                 onClick = { onSelected(item) },
                 icon = { Icon(item.icon, contentDescription = label) },
-                label = { Text(label) },
+                label = {
+                    Text(
+                        label,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = PrimaryOrange,
                     selectedTextColor = PrimaryOrange,

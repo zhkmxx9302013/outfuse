@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.ui.screens
+package com.outfuseplayer.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -163,7 +163,8 @@ fun HomeScreen(
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onItemClick: (LibraryItem) -> Unit,
     onPlay: (LibraryItem) -> Unit,
-    onViewAll: (HomeViewAllSection) -> Unit
+    onViewAll: (HomeViewAllSection) -> Unit,
+    onSearch: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val layoutStore = remember { HomeLayoutStore(context) }
@@ -203,7 +204,8 @@ fun HomeScreen(
             HomeTopBar(
                 expanded = expanded,
                 editing = editing,
-                onToggleEditing = { editing = !editing }
+                onToggleEditing = { editing = !editing },
+                onSearch = onSearch
             )
         }
         if (editing) {
@@ -339,7 +341,8 @@ fun HomeScreen(
 private fun HomeTopBar(
     expanded: Boolean,
     editing: Boolean,
-    onToggleEditing: () -> Unit
+    onToggleEditing: () -> Unit,
+    onSearch: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -352,17 +355,12 @@ private fun HomeTopBar(
         Column {
             Text(
                 text = "首页",
-                style = MaterialTheme.typography.headlineMedium,
+                style = if (expanded) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                text = "本地、NAS 与媒体服务器统一浏览",
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextMuted
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            IconButton(onClick = {}) {
+            IconButton(onClick = onSearch) {
                 Icon(Icons.Outlined.Search, contentDescription = "搜索", tint = MaterialTheme.colorScheme.onBackground)
             }
             IconButton(onClick = onToggleEditing) {
@@ -427,7 +425,7 @@ private fun HeroSection(
                 .align(Alignment.Center)
                 .fillMaxWidth()
                 .widthIn(max = 1180.dp)
-                .heightIn(min = if (expanded) 340.dp else 250.dp, max = if (expanded) 440.dp else 290.dp)
+                .heightIn(min = if (expanded) 340.dp else 220.dp, max = if (expanded) 440.dp else 250.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .clickable(onClick = onOpen)
         ) {
@@ -443,16 +441,16 @@ private fun HeroSection(
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(20.dp)
-                    .widthIn(max = if (expanded) 560.dp else 330.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(if (expanded) 20.dp else 14.dp)
+                    .widthIn(max = if (expanded) 560.dp else 300.dp),
+                verticalArrangement = Arrangement.spacedBy(if (expanded) 10.dp else 8.dp)
             ) {
                 FileNameText(
                     text = item.title,
                     mode = fileNameMode,
-                    style = if (expanded) MaterialTheme.typography.displaySmall else MaterialTheme.typography.headlineMedium,
+                    style = if (expanded) MaterialTheme.typography.displaySmall else MaterialTheme.typography.titleLarge,
                     color = Color.White,
-                    foldedLines = 2,
+                    foldedLines = if (expanded) 2 else 1,
                     expandedLines = 3
                 )
                 Row(
@@ -461,23 +459,26 @@ private fun HeroSection(
                 ) {
                     RatingBadge(item.rating)
                     TechBadge(item.resolution)
-                    item.hdr?.let { TechBadge(text = it, color = PrimaryAmber) }
+                    if (expanded) item.hdr?.let { TechBadge(text = it, color = PrimaryAmber) }
                 }
-                Text(
-                    text = item.overview,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.82f),
-                    maxLines = if (expanded) 3 else 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (expanded) {
+                    Text(
+                        text = item.overview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.82f),
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    PrimaryPlayButton(text = "继续播放", onClick = onPlay, modifier = Modifier.width(150.dp))
+                    PrimaryPlayButton(text = if (expanded) "继续播放" else "播放", onClick = onPlay, modifier = Modifier.width(if (expanded) 150.dp else 108.dp))
                     Surface(
                         modifier = Modifier
                             .height(48.dp)
+                            .width(if (expanded) 92.dp else 48.dp)
                             .clickable(onClick = onOpen),
                         shape = RoundedCornerShape(7.dp),
                         color = Color.White.copy(alpha = 0.12f),
@@ -494,8 +495,10 @@ private fun HeroSection(
                                 tint = Color.White.copy(alpha = 0.8f),
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("详情", style = MaterialTheme.typography.labelLarge, color = Color.White)
+                            if (expanded) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("详情", style = MaterialTheme.typography.labelLarge, color = Color.White)
+                            }
                         }
                     }
                 }
@@ -524,7 +527,9 @@ private fun SourceStatusStrip(
             }
         }
         counts.values.map { count ->
-            val subtitle = if (count.videos == 0 && count.images == 0) {
+            val subtitle = if (!expanded) {
+                "${count.videos} 视频 · ${count.images} 图"
+            } else if (count.videos == 0 && count.images == 0) {
                 "0 个媒体"
             } else {
                 "${count.videos} 个视频 · ${count.images} 张图片"
@@ -541,24 +546,26 @@ private fun SourceStatusStrip(
         items(stats) { (title, subtitle, color) ->
             Surface(
                 shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    modifier = Modifier.padding(horizontal = if (expanded) 14.dp else 12.dp, vertical = if (expanded) 12.dp else 9.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(shape = RoundedCornerShape(6.dp), color = color.copy(alpha = 0.18f)) {
-                        Icon(
-                            imageVector = Icons.Outlined.Sync,
-                            contentDescription = null,
-                            tint = color,
-                            modifier = Modifier
-                                .padding(8.dp)
-                                .size(18.dp)
-                        )
+                    if (expanded) {
+                        Surface(shape = RoundedCornerShape(6.dp), color = color.copy(alpha = 0.18f)) {
+                            Icon(
+                                imageVector = Icons.Outlined.Sync,
+                                contentDescription = null,
+                                tint = color,
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
                     }
-                    Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
                         Text(subtitle, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

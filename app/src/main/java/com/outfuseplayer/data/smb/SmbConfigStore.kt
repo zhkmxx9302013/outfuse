@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.data.smb
+package com.outfuseplayer.data.smb
 
 import android.content.Context
 
@@ -34,6 +34,11 @@ class SmbConfigStore(context: Context) {
 
     fun clear() {
         prefs.edit().clear().apply()
+    }
+
+    /** Clears the stored config only when it belongs to the given source id. */
+    fun clearIfMatches(sourceId: String) {
+        if (hasSaved() && loadLast().sourceId == sourceId) clear()
     }
 
     companion object {

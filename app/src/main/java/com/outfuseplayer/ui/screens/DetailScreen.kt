@@ -402,6 +402,13 @@ private fun DetailSections(
     expanded: Boolean,
     onItemClick: (LibraryItem) -> Unit
 ) {
+    val itemActorNames = item.cast.mapTo(linkedSetOf()) { it.name.trim().lowercase() }.filter { it.isNotBlank() }
+    val sameActorItems = related
+        .filter { candidate -> candidate.cast.any { it.name.trim().lowercase() in itemActorNames } }
+        .take(18)
+    val sameGenreItems = related
+        .filter { candidate -> candidate.id !in sameActorItems.map { it.id } && candidate.genres.any { it in item.genres } }
+        .take(18)
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(24.dp)
@@ -412,12 +419,30 @@ private fun DetailSections(
                 .padding(horizontal = if (expanded) 40.dp else 20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("简介", style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text("简介", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
             Text(
                 text = item.overview,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.78f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (item.genres.isNotEmpty()) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(item.genres.take(8)) { genre ->
+                        Surface(
+                            shape = RoundedCornerShape(7.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                        ) {
+                            Text(
+                                text = genre,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
         if (item.cast.isNotEmpty()) {
             CastRail(cast = item.cast, expanded = expanded)
@@ -425,9 +450,25 @@ private fun DetailSections(
         if (item.episodes.isNotEmpty()) {
             EpisodeList(episodes = item.episodes, expanded = expanded)
         }
+        if (sameActorItems.isNotEmpty()) {
+            MediaRail(
+                title = "同演员作品",
+                items = sameActorItems,
+                onItemClick = onItemClick,
+                posterWidth = if (expanded) 138.dp else 116.dp
+            )
+        }
+        if (sameGenreItems.isNotEmpty()) {
+            MediaRail(
+                title = "同类别影片",
+                items = sameGenreItems,
+                onItemClick = onItemClick,
+                posterWidth = if (expanded) 138.dp else 116.dp
+            )
+        }
         MediaRail(
             title = "更多类似影片",
-            items = related,
+            items = related.filter { item -> item.id !in sameActorItems.map { it.id } && item.id !in sameGenreItems.map { it.id } },
             onItemClick = onItemClick,
             posterWidth = if (expanded) 138.dp else 116.dp
         )
@@ -441,7 +482,7 @@ private fun CastRail(cast: List<CastMember>, expanded: Boolean) {
         Text(
             text = "演员",
             style = MaterialTheme.typography.titleMedium,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.padding(horizontal = if (expanded) 40.dp else 20.dp)
         )
         Spacer(modifier = Modifier.height(10.dp))
@@ -459,14 +500,14 @@ private fun CastRail(cast: List<CastMember>, expanded: Boolean) {
                     Text(
                         text = member.name,
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = member.role,
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -482,7 +523,7 @@ private fun EpisodeList(episodes: List<Episode>, expanded: Boolean) {
         modifier = Modifier.padding(horizontal = if (expanded) 40.dp else 20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text("第 1 季", style = MaterialTheme.typography.titleMedium, color = Color.White)
+        Text("第 1 季", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
         episodes.forEach { episode ->
             EpisodeRow(episode = episode)
         }
@@ -496,8 +537,8 @@ private fun EpisodeRow(episode: Episode) {
             .fillMaxWidth()
             .clickable(onClick = {}),
         shape = RoundedCornerShape(8.dp),
-        color = Surface2.copy(alpha = 0.66f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -524,21 +565,21 @@ private fun EpisodeRow(episode: Episode) {
                 Text(
                     text = "${episode.episodeNumber}. ${episode.title}",
                     style = MaterialTheme.typography.labelLarge,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = episode.overview,
                     style = MaterialTheme.typography.labelMedium,
-                    color = TextMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 LinearProgressIndicator(
                     progress = { episode.progress.coerceIn(0f, 1f) },
                     color = PrimaryOrange,
-                    trackColor = Color.White.copy(alpha = 0.14f),
+                    trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp)
@@ -547,7 +588,7 @@ private fun EpisodeRow(episode: Episode) {
             Text(
                 text = episode.durationLabel,
                 style = MaterialTheme.typography.labelMedium,
-                color = TextMuted
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.JsonReader
 import android.util.JsonToken
 import android.util.JsonWriter
+import com.outfuseplayer.model.CastMember
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
 import org.json.JSONArray
@@ -155,6 +156,16 @@ class MediaLibraryStore(context: Context) {
         beginArray()
         item.genres.forEach { value(it) }
         endArray()
+        name("cast")
+        beginArray()
+        item.cast.forEach { member ->
+            beginObject()
+            name("name").value(member.name)
+            name("role").value(member.role)
+            name("imageUrl").nullableValue(member.imageUrl)
+            endObject()
+        }
+        endArray()
         endObject()
     }
 
@@ -182,6 +193,7 @@ class MediaLibraryStore(context: Context) {
         var sourceName = "SMB"
         var streamUrl: String? = null
         var genres = emptyList<String>()
+        var cast = emptyList<CastMember>()
 
         beginObject()
         while (hasNext()) {
@@ -209,6 +221,7 @@ class MediaLibraryStore(context: Context) {
                 "sourceName" -> sourceName = nextStringOrEmpty().ifBlank { "SMB" }
                 "streamUrl" -> streamUrl = nextNullableString()
                 "genres" -> genres = readStringArray()
+                "cast" -> cast = readCastArray()
                 else -> skipValue()
             }
         }
@@ -240,7 +253,8 @@ class MediaLibraryStore(context: Context) {
                 hdr = hdr,
                 sourceName = sourceName,
                 streamUrl = streamUrl,
-                genres = genres
+                genres = genres,
+                cast = cast
             )
         }
     }.getOrNull()
@@ -276,7 +290,8 @@ class MediaLibraryStore(context: Context) {
             hdr = nullableString("hdr"),
             sourceName = optString("sourceName").ifBlank { "媒体库" },
             streamUrl = nullableString("streamUrl"),
-            genres = stringArray("genres")
+            genres = stringArray("genres"),
+            cast = castArray("cast")
         )
     }.getOrNull()
 
@@ -340,6 +355,35 @@ class MediaLibraryStore(context: Context) {
         }
     }
 
+    private fun JsonReader.readCastArray(): List<CastMember> {
+        if (peek() == JsonToken.NULL) {
+            nextNull()
+            return emptyList()
+        }
+        return buildList {
+            beginArray()
+            while (hasNext()) {
+                var name = ""
+                var role = ""
+                var imageUrl: String? = null
+                beginObject()
+                while (hasNext()) {
+                    when (nextName()) {
+                        "name" -> name = nextStringOrEmpty()
+                        "role" -> role = nextStringOrEmpty()
+                        "imageUrl" -> imageUrl = nextNullableString()
+                        else -> skipValue()
+                    }
+                }
+                endObject()
+                if (name.isNotBlank()) {
+                    add(CastMember(name = name, role = role, imageUrl = imageUrl))
+                }
+            }
+            endArray()
+        }
+    }
+
     private fun JSONObject.nullableString(key: String): String? =
         if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
 
@@ -351,6 +395,25 @@ class MediaLibraryStore(context: Context) {
         return buildList {
             for (index in 0 until array.length()) {
                 array.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
+    }
+
+    private fun JSONObject.castArray(key: String): List<CastMember> {
+        val array = optJSONArray(key) ?: return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val actor = array.optJSONObject(index) ?: continue
+                val name = actor.optString("name")
+                if (name.isNotBlank()) {
+                    add(
+                        CastMember(
+                            name = name,
+                            role = actor.optString("role"),
+                            imageUrl = actor.nullableString("imageUrl")
+                        )
+                    )
+                }
             }
         }
     }

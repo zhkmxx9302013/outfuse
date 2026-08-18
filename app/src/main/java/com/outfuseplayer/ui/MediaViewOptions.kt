@@ -1,5 +1,10 @@
-﻿package com.outfuseplayer.ui
+package com.outfuseplayer.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.ViewAgenda
+import androidx.compose.material.icons.outlined.ViewComfy
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.outfuseplayer.data.smb.SmbEntry
 import com.outfuseplayer.data.smb.isImageFileName
 import com.outfuseplayer.data.smb.isVideoFileName
@@ -20,6 +25,13 @@ enum class MediaLayout(val label: String) {
     LARGE("大图"),
     SMALL("小图")
 }
+
+val MediaLayout.icon: ImageVector
+    get() = when (this) {
+        MediaLayout.LIST -> Icons.Outlined.ViewAgenda
+        MediaLayout.LARGE -> Icons.Outlined.ViewComfy
+        MediaLayout.SMALL -> Icons.Outlined.GridView
+    }
 
 enum class MediaEntryFilter(val label: String) {
     ALL("全部"),

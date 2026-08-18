@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.ui.components
+package com.outfuseplayer.ui.components
 
 import android.graphics.ImageDecoder
 import android.graphics.drawable.AnimatedImageDrawable
@@ -8,6 +8,7 @@ import android.widget.ImageView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -92,7 +94,7 @@ fun SectionHeader(
         )
         if (action != null && onActionClick != null) {
             Text(
-                text = action,
+                text = if (action == "查看全部") "全部" else action,
                 style = MaterialTheme.typography.labelLarge,
                 color = PrimaryAmber,
                 modifier = Modifier.clickable(onClick = onActionClick)
@@ -558,6 +560,30 @@ fun AvatarImage(
                 color = MaterialTheme.colorScheme.onBackground
             )
         }
+    }
+}
+
+/**
+ * Small git-style "已入库" check badge shown over source-browser thumbnails.
+ * Rendered as an overlay so it never takes up layout space.
+ */
+@Composable
+fun InLibraryBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(18.dp)
+            .background(SoftTeal, CircleShape)
+            .then(
+                Modifier.border(1.dp, Color.White.copy(alpha = 0.85f), CircleShape)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Outlined.Check,
+            contentDescription = "已入库",
+            tint = Color.White,
+            modifier = Modifier.size(12.dp)
+        )
     }
 }
 

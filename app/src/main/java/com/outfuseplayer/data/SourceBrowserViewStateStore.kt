@@ -45,6 +45,17 @@ class SourceBrowserViewStateStore(context: Context) {
             .apply()
     }
 
+    /** Removes all remembered browsing state for a deleted source. */
+    fun delete(sourceId: String) {
+        prefs.edit()
+            .remove(key(sourceId, KEY_SORT))
+            .remove(key(sourceId, KEY_ASCENDING))
+            .remove(key(sourceId, KEY_LAYOUT))
+            .remove(key(sourceId, KEY_FILTER))
+            .remove(key(sourceId, KEY_PATH))
+            .apply()
+    }
+
     private fun key(sourceId: String, field: String): String = "$sourceId.$field"
 
     companion object {

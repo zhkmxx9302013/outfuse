@@ -1,7 +1,8 @@
-﻿package com.outfuseplayer.ui.screens
+package com.outfuseplayer.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.InsertDriveFile
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
@@ -39,6 +41,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -83,9 +87,11 @@ import com.outfuseplayer.ui.FileNameDisplayMode
 import com.outfuseplayer.ui.MediaEntryFilter
 import com.outfuseplayer.ui.MediaLayout
 import com.outfuseplayer.ui.MediaSort
+import com.outfuseplayer.ui.icon
 import com.outfuseplayer.ui.FileAction
 import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
+import com.outfuseplayer.ui.components.InLibraryBadge
 import com.outfuseplayer.ui.enumValueOrDefault
 import com.outfuseplayer.ui.filterEntriesFor
 import com.outfuseplayer.ui.sortedEntriesFor
@@ -103,6 +109,7 @@ fun SmbBrowserScreen(
     publishSourceStatus: Boolean = true,
     highlightPath: String? = null,
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
+    isEntryInLibrary: (String, String) -> Boolean = { _, _ -> false },
     onBack: () -> Unit,
     onSourceAdded: (MediaSource) -> Unit,
     onMediaDiscovered: (List<LibraryItem>) -> Unit,
@@ -316,6 +323,7 @@ fun SmbBrowserScreen(
                             entry = entry,
                             previewItem = if (entry.isMedia) config.toLibraryItem(entry) else null,
                             highlighted = highlighted,
+                            inLibrary = entry.isMedia && isEntryInLibrary(config.sourceId, entry.path),
                             fileNameMode = fileNameMode,
                             onActionClick = { actionEntry = entry },
                             onClick = {
@@ -344,6 +352,7 @@ fun SmbBrowserScreen(
                             previewItem = if (entry.isMedia) config.toLibraryItem(entry) else null,
                             compact = layout == MediaLayout.SMALL,
                             highlighted = highlighted,
+                            inLibrary = entry.isMedia && isEntryInLibrary(config.sourceId, entry.path),
                             fileNameMode = fileNameMode,
                             onActionClick = { actionEntry = entry },
                             onClick = {
@@ -468,50 +477,104 @@ private fun BrowserViewControls(
 ) {
     androidx.compose.foundation.lazy.LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 2.dp)
+        contentPadding = PaddingValues(horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        items(MediaEntryFilter.entries) { option ->
-            FilterChip(
-                selected = filter == option,
-                onClick = { onFilter(option) },
-                label = { Text(option.label) },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
-                    selectedLabelColor = PrimaryOrange
-                )
+        item {
+            OptionDropdown(
+                label = "筛选：${filter.label}",
+                options = MediaEntryFilter.entries.map { it.label },
+                selectedLabel = filter.label,
+                onSelected = { index -> onFilter(MediaEntryFilter.entries[index]) }
             )
         }
-        items(MediaSort.entries) { option ->
-            val active = sort == option
-            FilterChip(
-                selected = active,
-                onClick = { onSort(option) },
-                label = { Text(if (active) "${option.label}${if (ascending) "↑" else "↓"}" else option.label) },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
-                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
-                )
+        item {
+            OptionDropdown(
+                label = "排序：${sort.label}${if (ascending) " ↑" else " ↓"}",
+                options = MediaSort.entries.map { it.label },
+                selectedLabel = sort.label,
+                onSelected = { index -> onSort(MediaSort.entries[index]) }
             )
         }
-        items(MediaLayout.entries) { option ->
-            FilterChip(
-                selected = layout == option,
-                onClick = { onLayout(option) },
-                label = { Text(option.label) },
-                shape = RoundedCornerShape(7.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    selectedContainerColor = PrimaryOrange.copy(alpha = 0.16f),
-                    selectedLabelColor = PrimaryOrange
-                )
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                MediaLayout.entries.forEach { option ->
+                    val active = layout == option
+                    IconButton(
+                        onClick = { onLayout(option) },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .then(
+                                if (active) {
+                                    Modifier.background(PrimaryOrange.copy(alpha = 0.14f), RoundedCornerShape(7.dp))
+                                } else {
+                                    Modifier
+                                }
+                            )
+                    ) {
+                        Icon(
+                            option.icon,
+                            contentDescription = option.label,
+                            tint = if (active) PrimaryOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionDropdown(
+    label: String,
+    options: List<String>,
+    selectedLabel: String,
+    onSelected: (Int) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(7.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Text(
+                label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelLarge
             )
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                Icons.Outlined.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEachIndexed { index, option ->
+                DropdownMenuItem(
+                    text = { Text(option, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        expanded = false
+                        onSelected(index)
+                    },
+                    trailingIcon = {
+                        if (option == selectedLabel) {
+                            Icon(
+                                Icons.Outlined.Check,
+                                contentDescription = null,
+                                tint = PrimaryOrange,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -521,6 +584,7 @@ private fun BrowserEntryRow(
     entry: SmbEntry,
     previewItem: LibraryItem?,
     highlighted: Boolean,
+    inLibrary: Boolean,
     fileNameMode: FileNameDisplayMode,
     onActionClick: () -> Unit,
     onClick: () -> Unit
@@ -539,13 +603,18 @@ private fun BrowserEntryRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            BrowserEntryPreview(
-                entry = entry,
-                previewItem = previewItem,
-                modifier = Modifier
-                    .width(64.dp)
-                    .aspectRatio(1.28f)
-            )
+            Box {
+                BrowserEntryPreview(
+                    entry = entry,
+                    previewItem = previewItem,
+                    modifier = Modifier
+                        .width(64.dp)
+                        .aspectRatio(1.28f)
+                )
+                if (inLibrary) {
+                    InLibraryBadge(modifier = Modifier.align(Alignment.TopEnd).padding(3.dp))
+                }
+            }
             Column(modifier = Modifier.weight(1f)) {
                 FileNameText(
                     text = entry.name,
@@ -584,6 +653,7 @@ private fun BrowserEntryCard(
     previewItem: LibraryItem?,
     compact: Boolean,
     highlighted: Boolean,
+    inLibrary: Boolean,
     fileNameMode: FileNameDisplayMode,
     onActionClick: () -> Unit,
     onClick: () -> Unit
@@ -601,13 +671,18 @@ private fun BrowserEntryCard(
             modifier = Modifier.padding(if (compact) 8.dp else 10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            BrowserEntryPreview(
-                entry = entry,
-                previewItem = previewItem,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(if (compact) 1.15f else 1.35f)
-            )
+            Box {
+                BrowserEntryPreview(
+                    entry = entry,
+                    previewItem = previewItem,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(if (compact) 1.15f else 1.35f)
+                )
+                if (inLibrary) {
+                    InLibraryBadge(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp))
+                }
+            }
             FileNameText(
                 text = entry.name,
                 mode = fileNameMode,

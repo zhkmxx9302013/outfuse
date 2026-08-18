@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.ui.screens
+package com.outfuseplayer.ui.screens
 
 import android.graphics.ImageDecoder
 import android.graphics.Bitmap
@@ -17,7 +17,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -93,6 +92,7 @@ fun ImageViewerScreen(
     slideshowIntervalSeconds: Int = 4,
     onAddToSeries: (LibraryItem, String) -> Unit = { _, _ -> },
     onShowFileLocation: (LibraryItem) -> Unit = {},
+    onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
     onBack: () -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -106,9 +106,11 @@ fun ImageViewerScreen(
     var dragPixels by remember { mutableStateOf(0f) }
     var pageSwitchDirection by remember { mutableStateOf(0) }
     val pageSlide = remember { Animatable(0f) }
+    // Hand-rolled zoom / pan / rotate state. Reset when switching images.
     var scale by remember(currentIndex) { mutableStateOf(1f) }
     var offsetX by remember(currentIndex) { mutableStateOf(0f) }
     var offsetY by remember(currentIndex) { mutableStateOf(0f) }
+    var rotation by remember(currentIndex) { mutableStateOf(0f) }
     var stripVisible by remember { mutableStateOf(false) }
     var moreVisible by remember { mutableStateOf(false) }
     var slideshowPlaying by remember { mutableStateOf(false) }
@@ -119,6 +121,33 @@ fun ImageViewerScreen(
     var message by remember(currentItem.id) { mutableStateOf("正在加载图片...") }
     val uri = remember(currentItem.streamUrl) { currentItem.streamUrl?.let(Uri::parse) }
     val isGif = currentItem.isGifImage()
+
+    // Rotation is snapped to 90° steps; only the snapped value is animated.
+    val snappedRotation = run {
+        val normalized = ((rotation % 360f) + 360f) % 360f
+        kotlin.math.round(normalized / 90f) * 90f % 360f
+    }
+    // Smooth spring animations for zoom / pan / rotate.
+    val animatedScale by animateFloatAsState(
+        targetValue = scale,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "imageScale"
+    )
+    val animatedOffsetX by animateFloatAsState(
+        targetValue = offsetX,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
+        label = "imageOffsetX"
+    )
+    val animatedOffsetY by animateFloatAsState(
+        targetValue = offsetY,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
+        label = "imageOffsetY"
+    )
+    val animatedRotation by animateFloatAsState(
+        targetValue = snappedRotation,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "imageRotation"
+    )
 
     fun selectIndex(index: Int) {
         val targetIndex = index.coerceIn(0, imageItems.lastIndex)
@@ -171,23 +200,27 @@ fun ImageViewerScreen(
                 decodedBitmap = ThumbnailRepository.imageBitmap(context, currentItem, maxBytes = 96 * 1024 * 1024)
                 if (decodedBitmap == null) {
                     message = "图片解码失败"
+                    onAutoRemoveIfMissing(currentItem)
                 }
             }
         } else if (uri != null && currentItem.isGifImage()) {
             imageBytes = ThumbnailRepository.imageBytes(context, currentItem, maxBytes = 96 * 1024 * 1024)
             if (imageBytes == null) {
                 message = "GIF 加载失败"
+                onAutoRemoveIfMissing(currentItem)
             }
         } else if (uri != null) {
             if (uri.scheme.equals("content", ignoreCase = true) || uri.scheme.equals("file", ignoreCase = true)) {
                 decodedBitmap = ThumbnailRepository.decodeContentImage(context, uri, maxEdge = 4096)
                 if (decodedBitmap == null) {
                     message = "图片解码失败"
+                    onAutoRemoveIfMissing(currentItem)
                 }
             } else {
                 decodedBitmap = ThumbnailRepository.imageBitmap(context, currentItem, maxBytes = 96 * 1024 * 1024)
                 if (decodedBitmap == null) {
                     message = "图片解码失败"
+                    onAutoRemoveIfMissing(currentItem)
                 }
             }
         }
@@ -197,7 +230,17 @@ fun ImageViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(currentIndex, scale, stripVisible) {
+    ) {
+        val bytes = imageBytes
+        val bitmap = decodedBitmap
+        val pageSlideProgress = pageSlide.value
+        val pageTravel = kotlin.math.abs(pageSlideProgress).coerceIn(0f, 1f)
+        // Hand-rolled gestures on the image itself (single node, no competing
+        // pointer input): double-tap zoom, pinch zoom, two-finger rotation and
+        // pan with boundary clamping; horizontal drag pages when not zoomed.
+        val imageModifier = Modifier
+            .fillMaxSize()
+            .pointerInput(currentIndex) {
                 detectTapGestures(
                     onTap = {
                         if (moreVisible) {
@@ -211,84 +254,64 @@ fun ImageViewerScreen(
                             scale = 1f
                             offsetX = 0f
                             offsetY = 0f
+                            rotation = 0f
                         } else {
-                            val targetScale = 2.5f
+                            val target = 3f
+                            scale = target
+                            offsetX = (size.width / 2f - tapOffset.x) * (target - 1f)
+                            offsetY = (size.height / 2f - tapOffset.y) * (target - 1f)
                             stripVisible = false
-                            scale = targetScale
-                            offsetX = (size.width / 2f - tapOffset.x) * (targetScale - 1f)
-                            offsetY = (size.height / 2f - tapOffset.y) * (targetScale - 1f)
                         }
                     }
                 )
             }
-            .pointerInput(currentIndex, scale) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    val nextScale = (scale * zoom).coerceIn(1f, 6f)
-                    scale = nextScale
-                    if (nextScale > 1f) {
-                        stripVisible = false
-                        offsetX += pan.x
-                        offsetY += pan.y
+            .pointerInput(currentIndex) {
+                detectTransformGestures { centroid, pan, zoom, gestureRotation ->
+                    if (scale > 1.01f || zoom != 1f) {
+                        if (zoom != 1f) {
+                            val nextScale = (scale * zoom).coerceIn(1f, 6f)
+                            val k = nextScale / scale
+                            val cx = size.width / 2f
+                            val cy = size.height / 2f
+                            offsetX = centroid.x - cx - (centroid.x - cx - offsetX) * k
+                            offsetY = centroid.y - cy - (centroid.y - cy - offsetY) * k
+                            scale = nextScale
+                        } else {
+                            offsetX += pan.x
+                            offsetY += pan.y
+                        }
+                        rotation = (rotation + gestureRotation) % 360f
+                        val maxX = (size.width * (scale - 1f)) / 2f
+                        val maxY = (size.height * (scale - 1f)) / 2f
+                        offsetX = offsetX.coerceIn(-maxX, maxX)
+                        offsetY = offsetY.coerceIn(-maxY, maxY)
+                        if (scale > 1.01f) stripVisible = false
                     } else {
-                        offsetX = 0f
-                        offsetY = 0f
+                        // Page swiping when the image is at 1x.
+                        dragPixels += pan.x
+                        when {
+                            dragPixels <= -120 -> {
+                                selectIndex(currentIndex + 1)
+                                dragPixels = 0f
+                            }
+                            dragPixels >= 120 -> {
+                                selectIndex(currentIndex - 1)
+                                dragPixels = 0f
+                            }
+                        }
                     }
                 }
             }
-            .pointerInput(imageItems.size, currentIndex) {
-                detectHorizontalDragGestures(
-                    onDragStart = {
-                        dragPixels = 0f
-                    },
-                    onHorizontalDrag = { change, dragAmount ->
-                        if (scale <= 1.05f) {
-                            change.consume()
-                            dragPixels += dragAmount
-                        }
-                    },
-                    onDragEnd = {
-                        if (scale <= 1.05f) {
-                            when {
-                                dragPixels < -80f && currentIndex < imageItems.lastIndex -> selectIndex(currentIndex + 1)
-                                dragPixels > 80f && currentIndex > 0 -> selectIndex(currentIndex - 1)
-                            }
-                        }
-                        dragPixels = 0f
-                    },
-                    onDragCancel = { dragPixels = 0f }
-                )
-            }
-    ) {
-        val bytes = imageBytes
-        val bitmap = decodedBitmap
-        val animatedScale by animateFloatAsState(
-            targetValue = scale,
-            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
-            label = "imageScale"
-        )
-        val animatedOffsetX by animateFloatAsState(
-            targetValue = offsetX,
-            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
-            label = "imageOffsetX"
-        )
-        val animatedOffsetY by animateFloatAsState(
-            targetValue = offsetY,
-            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
-            label = "imageOffsetY"
-        )
-        val pageSlideProgress = pageSlide.value
-        val pageTravel = kotlin.math.abs(pageSlideProgress).coerceIn(0f, 1f)
-        val imageModifier = Modifier
-            .fillMaxSize()
             .graphicsLayer {
                 val pageScale = 1f - pageTravel * 0.035f
-                val dragTravel = if (size.width > 0f && animatedScale <= 1.05f) {
+                val dragTravel = if (size.width > 0f && scale <= 1.01f) {
                     kotlin.math.abs(dragPixels / size.width).coerceIn(0f, 1f)
                 } else {
                     0f
                 }
                 scaleX = animatedScale * pageScale
                 scaleY = animatedScale * pageScale
+                rotationZ = animatedRotation
                 translationX = animatedOffsetX + pageSlideProgress * size.width + dragPixels
                 translationY = animatedOffsetY
                 alpha = 1f - maxOf(pageTravel * 0.18f, dragTravel * 0.12f)

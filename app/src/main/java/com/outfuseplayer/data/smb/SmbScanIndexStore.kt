@@ -10,6 +10,14 @@ import kotlin.math.absoluteValue
 class SmbScanIndexStore(context: Context) {
     private val filesDir = context.applicationContext.filesDir
 
+    /** Removes every scan-index file that belongs to the given source. */
+    fun delete(sourceId: String) {
+        val prefix = indexFilePrefix(sourceId)
+        filesDir.listFiles { file ->
+            file.isFile && file.name.startsWith(prefix) && file.name.endsWith(INDEX_SUFFIX)
+        }?.forEach { runCatching { it.delete() } }
+    }
+
     fun loadSignatures(sourceId: String, rootPath: String): Map<String, String> {
         val file = indexFile(sourceId, rootPath)
         if (!file.exists() || file.length() == 0L) return emptyMap()
@@ -73,6 +81,12 @@ class SmbScanIndexStore(context: Context) {
 
     private fun indexFile(sourceId: String, rootPath: String): File {
         val key = "$sourceId|${rootPath.toRemotePath()}"
-        return File(filesDir, "smb_scan_index_${key.hashCode().absoluteValue}.json")
+        return File(filesDir, "${indexFilePrefix(sourceId)}${key.hashCode().absoluteValue}$INDEX_SUFFIX")
+    }
+
+    private fun indexFilePrefix(sourceId: String): String = "smb_scan_index_${sourceId.hashCode().absoluteValue}_"
+
+    private companion object {
+        const val INDEX_SUFFIX = ".json"
     }
 }

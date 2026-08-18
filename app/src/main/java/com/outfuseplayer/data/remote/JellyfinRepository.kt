@@ -237,7 +237,7 @@ class JellyfinRepository {
         apiUrl("/Items/$itemId/Images/Primary", mapOf("fillWidth" to "640", "quality" to "88", "api_key" to token))
 
     private fun RemoteSourceConfig.mediaServerHeaders(includeToken: Boolean = true): Map<String, String> = buildMap {
-        put("X-Emby-Authorization", "MediaBrowser Client=\"outfuse\", Device=\"Android\", DeviceId=\"outfuse-android\", Version=\"0.2\"")
+        put("X-Emby-Authorization", "MediaBrowser Client=\"outfuse\", Device=\"Android\", DeviceId=\"outfuse-android\", Version=\"0.3\"")
         if (includeToken && token.isNotBlank()) put("X-Emby-Token", token)
     }
 

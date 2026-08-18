@@ -31,6 +31,7 @@ class RemoteConfigStore(context: Context) {
 
     fun delete(sourceId: String) {
         saveAll(loadAll().filterNot { it.sourceId == sourceId })
+        RemoteSourceRegistry.unregister(sourceId)
     }
 
     private fun saveAll(configs: List<RemoteSourceConfig>) {

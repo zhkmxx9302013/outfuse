@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.data
+package com.outfuseplayer.data
 
 import android.content.Context
 
@@ -19,6 +19,23 @@ class PlaybackPositionStore(context: Context) {
             .putLong(key(itemId, path), if (completed) 0L else positionMs.coerceAtLeast(0L))
             .putLong("${key(itemId, path)}:duration", durationMs)
             .apply()
+    }
+
+    /** Removes playback records belonging to the given item ids (e.g. after a source is deleted). */
+    fun removeForItems(itemIds: Set<String>) {
+        if (itemIds.isEmpty()) return
+        val editor = prefs.edit()
+        prefs.all.keys.forEach { storedKey ->
+            val itemId = storedKey.substringBefore('|')
+            if (itemId in itemIds) editor.remove(storedKey)
+        }
+        val lastPlayed = prefs.getString(KEY_LAST_PLAYED_ITEM_ID, null)
+        if (lastPlayed != null && lastPlayed in itemIds) {
+            editor.remove(KEY_LAST_PLAYED_ITEM_ID)
+            editor.remove(KEY_LAST_PLAYED_PATH)
+            editor.remove(KEY_LAST_PLAYED_AT)
+        }
+        editor.apply()
     }
 
     private fun key(itemId: String, path: String): String = "$itemId|$path"
