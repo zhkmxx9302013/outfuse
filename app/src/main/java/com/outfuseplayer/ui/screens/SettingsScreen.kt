@@ -632,7 +632,6 @@ private fun SettingsTopBar(expanded: Boolean) {
             .padding(horizontal = if (expanded) 32.dp else 20.dp, vertical = 8.dp)
     ) {
         Text(strings.settings, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-        Text(strings.settingsSubtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

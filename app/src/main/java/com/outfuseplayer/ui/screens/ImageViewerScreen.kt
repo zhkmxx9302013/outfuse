@@ -27,17 +27,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Pause
@@ -45,11 +49,18 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -77,6 +88,7 @@ import com.outfuseplayer.data.smb.toRemotePath
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.ui.components.FilePreviewThumb
+import com.outfuseplayer.ui.components.MarqueeText
 import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
@@ -91,6 +103,8 @@ fun ImageViewerScreen(
     series: List<UserSeries> = emptyList(),
     slideshowIntervalSeconds: Int = 4,
     onAddToSeries: (LibraryItem, String) -> Unit = { _, _ -> },
+    onRemoveFromSeries: (String, String) -> Unit = { _, _ -> },
+    onRenameSeries: (String, String) -> Unit = { _, _ -> },
     onShowFileLocation: (LibraryItem) -> Unit = {},
     onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
     onBack: () -> Unit
@@ -113,9 +127,11 @@ fun ImageViewerScreen(
     var rotation by remember(currentIndex) { mutableStateOf(0f) }
     var stripVisible by remember { mutableStateOf(false) }
     var moreVisible by remember { mutableStateOf(false) }
+    var showFavoritesSheet by remember { mutableStateOf(false) }
     var slideshowPlaying by remember { mutableStateOf(false) }
     var slideshowShuffle by remember { mutableStateOf(false) }
     val currentItem = imageItems.getOrNull(currentIndex) ?: item
+    val inAnySeries = series.any { currentItem.id in it.itemIds }
     var imageBytes by remember(currentItem.id) { mutableStateOf<ByteArray?>(null) }
     var decodedBitmap by remember(currentItem.id) { mutableStateOf<Bitmap?>(null) }
     var message by remember(currentItem.id) { mutableStateOf("正在加载图片...") }
@@ -406,11 +422,11 @@ fun ImageViewerScreen(
                 IconButton(onClick = { moreVisible = !moreVisible }) {
                     Icon(Icons.Outlined.MoreVert, contentDescription = "更多", tint = Color.White)
                 }
-                IconButton(onClick = { onAddToSeries(currentItem, series.firstOrNull()?.name ?: "我的系列") }) {
+                IconButton(onClick = { showFavoritesSheet = true }) {
                     Icon(
-                        Icons.Outlined.BookmarkBorder,
-                        contentDescription = "加入系列",
-                        tint = if (series.any { currentItem.id in it.itemIds }) PrimaryOrange else Color.White
+                        if (inAnySeries) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                        contentDescription = if (inAnySeries) "管理收藏" else "收藏",
+                        tint = if (inAnySeries) PrimaryOrange else Color.White
                     )
                 }
                 IconButton(enabled = currentIndex > 0, onClick = { selectIndex(currentIndex - 1) }) {
@@ -452,6 +468,16 @@ fun ImageViewerScreen(
                     .padding(horizontal = 16.dp, vertical = 14.dp)
             )
         }
+    }
+    if (showFavoritesSheet) {
+        ImageSeriesFavoritesSheet(
+            item = currentItem,
+            series = series,
+            onAddToSeries = { name -> onAddToSeries(currentItem, name) },
+            onRemoveFromSeries = { seriesId -> onRemoveFromSeries(seriesId, currentItem.id) },
+            onRenameSeries = onRenameSeries,
+            onDismiss = { showFavoritesSheet = false }
+        )
     }
 }
 
@@ -585,6 +611,112 @@ private fun ImageSwitchStrip(
                 border = BorderStroke(1.dp, if (index == currentIndex) PrimaryOrange else Color.White.copy(alpha = 0.12f))
             ) {
                 FilePreviewThumb(item = image, modifier = Modifier.fillMaxSize())
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImageSeriesFavoritesSheet(
+    item: LibraryItem,
+    series: List<UserSeries>,
+    onAddToSeries: (String) -> Unit,
+    onRemoveFromSeries: (String) -> Unit,
+    onRenameSeries: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var editingSeries by remember { mutableStateOf<UserSeries?>(null) }
+    var newName by remember { mutableStateOf("") }
+    val isEditing = editingSeries != null
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = if (isEditing) "编辑系列名称" else "收藏到系列",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = if (isEditing) "修改「${editingSeries?.name}」的名称。" else "勾选要加入的系列，或新建一个系列。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted
+            )
+            if (series.isNotEmpty()) {
+                series.forEach { collection ->
+                    val contains = item.id in collection.itemIds
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                if (contains) onRemoveFromSeries(collection.id) else onAddToSeries(collection.name)
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = contains,
+                            onCheckedChange = { checked ->
+                                if (checked) onAddToSeries(collection.name) else onRemoveFromSeries(collection.id)
+                            }
+                        )
+                        MarqueeText(
+                            text = collection.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (contains) PrimaryOrange else MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = {
+                            editingSeries = collection
+                            newName = collection.name
+                        }) {
+                            Icon(Icons.Outlined.Edit, contentDescription = "编辑名称", tint = TextMuted)
+                        }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text(if (isEditing) "系列名称" else "新系列名称") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Surface2.copy(alpha = 0.66f),
+                        unfocusedContainerColor = Surface2.copy(alpha = 0.66f),
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedLabelColor = PrimaryOrange,
+                        unfocusedLabelColor = TextMuted,
+                        cursorColor = PrimaryOrange
+                    )
+                )
+                Button(
+                    onClick = {
+                        val name = newName.trim().ifBlank { return@Button }
+                        if (isEditing) {
+                            editingSeries?.let { onRenameSeries(it.id, name) }
+                            editingSeries = null
+                        } else {
+                            onAddToSeries(name)
+                        }
+                        newName = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange, contentColor = Color.White)
+                ) {
+                    Text(if (isEditing) "保存" else "新建")
+                }
             }
         }
     }

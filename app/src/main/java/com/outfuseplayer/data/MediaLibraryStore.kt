@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.data
+package com.outfuseplayer.data
 
 import android.content.Context
 import android.util.JsonReader
@@ -242,7 +242,7 @@ class MediaLibraryStore(context: Context) {
                 durationLabel = durationLabel,
                 posterUrl = posterUrl,
                 backdropUrl = backdropUrl,
-                overview = overview,
+                overview = overview.sanitizeOverview(),
                 rating = rating,
                 progress = progress,
                 seasonNumber = seasonNumber,
@@ -279,7 +279,7 @@ class MediaLibraryStore(context: Context) {
             durationLabel = optString("durationLabel").ifBlank { if (itemType == LibraryItemType.IMAGE) "图片" else "视频" },
             posterUrl = nullableString("posterUrl"),
             backdropUrl = nullableString("backdropUrl"),
-            overview = optString("overview"),
+            overview = optString("overview").sanitizeOverview(),
             rating = optString("rating").ifBlank { "-" },
             progress = optDouble("progress", 0.0).toFloat(),
             seasonNumber = nullableInt("seasonNumber"),
@@ -418,5 +418,15 @@ class MediaLibraryStore(context: Context) {
         }
     }
 }
+
+/**
+ * Strips legacy filler sentences that were baked into item overviews in older
+ * versions (e.g. "当前版本不做刮削，只使用文件名…"), leaving the useful
+ * file / size description.
+ */
+private fun String.sanitizeOverview(): String =
+    replace(Regex("""(。|\s)*当前版本不做刮削[^。]*。?"""), "")
+        .replace(Regex("""(。|\s)*当前版本暂不刮削[^。]*。?"""), "")
+        .trim()
 
 

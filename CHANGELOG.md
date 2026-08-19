@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.3.7 - 2026-08-19
+
+### 中文说明
+
+- 首页"自建系列"点进单个系列时，只显示该系列内的媒体（标题显示系列名），不再混入全部系列。
+- 移除缩略图上的系列标签角标（原"系列名 +N"），所有媒体卡片/列表缩略图不再叠加系列标记。
+- 媒体库顶部统计只显示「共 / 视频 / 图片」，去掉「文件」数量。
+- 媒体库顶部控件改版：类型/来源/系列筛选折叠进一个「筛选」按钮（带生效数量徽标），默认收起，只常驻「筛选 / 排序 / 布局切换」，大幅节省顶部空间。
+- 搜索框占位文字改为「搜索标题、文件夹」。
+- 删除设置页顶部无意义的副标题说明。
+- 读取媒体库时清洗历史版本写入的「当前版本不做刮削…」简介残留，详情页不再显示该废话。
+
+### English Notes
+
+- Opening a single series from Home now shows only that series' media (titled with the series name) instead of mixing every series.
+- Removed the series-label badge (the old "name +N") from all media thumbnails.
+- The library top stats now show only total / videos / images (dropped the file count).
+- Library top controls redesigned: type/source/series filters collapse into a single "Filter" button (with an active-count badge) that is collapsed by default, leaving only Filter / Sort / layout toggle always visible — reclaiming top space.
+- Search placeholder shortened to "搜索标题、文件夹".
+- Removed the pointless subtitle under the Settings heading.
+- Media-library loading now strips the legacy "当前版本不做刮削…" filler baked into old overviews, so the detail page no longer shows it.
+
+## 0.3.6 - 2026-08-19
+
+### 中文说明
+
+- 修复详情页下载功能：SMB 来源改用与刷新/同步一致的持久化配置查找（内存注册表 → JSON 配置 → 传统配置），App 重启后仍能正确解析来源并下载；下载结果同时以 Toast 与顶部提示展示。
+
+### English Notes
+
+- Fixed the detail-page download feature: SMB sources now resolve credentials through the same persisted-config chain used by refresh/sync (memory registry → JSON config → legacy config), so downloads keep working after an app restart; results show as both a toast and the top notice.
+
+## 0.3.5 - 2026-08-19
+
+### 中文说明
+
+- 首页"自建系列"布局改版：所有系列改为**4 宫格缩略图卡片**（取每个系列前 4 个条目的封面拼成 2×2 拼贴），所有系列**横向平铺一行滑动查看**，卡片显示系列名与媒体数量；缩略图上不再叠加系列标签角标。
+
+### English Notes
+
+- Home "Custom Series" section redesigned: each series renders as a 2×2 thumbnail collage card (first four items), all series laid out in one horizontally scrollable row with the series name and media count; per-thumbnail series badges removed.
+
+## 0.3.4 - 2026-08-19
+
+### 中文说明
+
+- 修复：详情页在条目属于多个系列时只显示一个系列 chip（收藏区块的滚动文本组件在横向列表中撑满宽度，挤掉了其余 chip）——改为固定宽度省略号显示，多个系列全部展示。
+- 详情页下载按钮生效：支持 SMB / WebDAV（网盘）/ 本地文件 / HTTP 下载到设置的下载目录，完成后提示；右上角"更多"菜单新增：下载、显示文件位置、从媒体库移除。
+- 图片查看器收藏与视频一致：书签按钮改为弹出收藏浮窗，可多选系列、新建系列、重命名系列；已收藏时图标为实心橙色。
+- 清理 SMB/本地/网盘条目简介中过时的"当前版本不做刮削"描述（全部来源已确认干净）。
+
+### English Notes
+
+- Fixed: the detail page showed only one series chip when an item belonged to multiple series (the marquee text component stretched to fill the horizontal list and pushed the rest out) — chips now use fixed-width ellipsized text so every series shows.
+- The detail page download button now works: downloads SMB / WebDAV (cloud drive) / local / HTTP items to the configured download folder with a result notice; the top-right "more" menu gained Download, Show file location, and Remove from library.
+- Image viewer favorites now match videos: the bookmark button opens the favorites sheet with multi-select, create, and rename; the icon fills orange when already favorited.
+- Removed the outdated "no scraping in this version" description from SMB / local / remote item overviews (all sources verified clean).
+
+## 0.3.3 - 2026-08-19
+
+### 中文说明
+
+- **收藏浮窗**：详情页点右上角收藏图标弹出浮窗，可多选/取消勾选已建立的系列，或输入名称新建系列、点编辑图标重命名已有系列；已收藏时再点收藏图标直接取消收藏（从所有所属系列移除并 Toast 提示）。
+- 详情页收藏区精简：不再内嵌系列名称输入框与编辑按钮，只显示当前所属系列 chip（点 chip 管理、点 ✕ 移除）；未加入时提示用右上角图标管理。
+- 修复：多系列收藏时首页"自建系列"轨道不显示但"查看全部"页有内容的 bug——首页/查看全部页的系列缓存改为按系列内容指纹失效，往已有系列加入视频后首页立即更新。
+- 系列名称过长自动轮播：首页各区块标题与收藏浮窗中的系列名超宽时横向滚动展示，不占额外空间。
+- 移除 SMB 条目简介中"当前版本不做刮削"的过期描述。
+
+### English Notes
+
+- Favorites sheet: tapping the bookmark icon on the detail page opens a bottom sheet to multi-select/unselect existing series, create a new series by name, or rename one via the edit icon; when already favorited, tapping the icon removes the item from all containing series with a toast.
+- The detail-page series editor is slimmed down: no inline name field / edit buttons, only chips for series the item belongs to (tap chip to manage, tap ✕ to remove); an empty state points to the top-right bookmark icon.
+- Fixed: with multiple series the Home "Custom Series" rails sometimes did not render while the "view all" page showed the items — the rail caches now invalidate on series content, so adding a video to an existing series updates Home immediately.
+- Over-long series names auto-scroll (marquee) in section headers and the favorites sheet instead of consuming extra layout space.
+- Removed the outdated "no scraping in this version" description on SMB item details.
+
+## 0.3.2 - 2026-08-18
+
+### 中文说明
+
+- 修复：视频/图片加入系列（标签）后无法取消——详情页已加入的系列 chip 出现 ✕ 按钮，点击即可从该系列移除；图片查看器的书签按钮改为切换（已加入时点击取消加入，图标变为实心橙色书签）。
+- 系列按标签筛选：媒体库（含首页"查看全部"页）新增"系列"下拉，选中某系列后只显示该系列的视频，不再所有系列混在一起；首页"自建系列"改为按系列分组展示（每个系列一条横向轨道），一目了然。
+
+### English Notes
+
+- Fixed: items added to a series (tag) could not be removed — the detail screen now shows an ✕ button on series chips the item belongs to, tapping it removes the item; the image viewer bookmark button toggles (tap to remove when already added, icon becomes a filled orange bookmark).
+- Series filter: the library (including Home "view all" pages) gains a "Series" dropdown that narrows the list to one series; the Home "Custom Series" section now renders one rail per series instead of mixing them all together.
+
 ## 0.3.1 - 2026-08-18
 
 ### 中文说明

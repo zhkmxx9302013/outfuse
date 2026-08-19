@@ -263,6 +263,8 @@ private fun OutfuseAppContent(
     var playerId by remember { mutableStateOf<String?>(null) }
     // Home collections can contain thousands of items. Keep this transient route out of saved state.
     var homeBrowseSection by remember { mutableStateOf<HomeViewAllSection?>(null) }
+    // When opening a single series from Home, this carries the target series id.
+    var homeBrowseSeriesId by remember { mutableStateOf<String?>(null) }
     var lastPlayedId by rememberSaveable { mutableStateOf(playbackPositionStore.lastPlayedItemId()) }
     var playQueue by remember { mutableStateOf<List<LibraryItem>>(emptyList()) }
     var startShuffle by remember { mutableStateOf(false) }
@@ -982,45 +984,102 @@ private fun OutfuseAppContent(
         }
     }
 
-    fun handleFileAction(request: FileActionRequest) {
-        val resolved = configForItem(request.item)
-        if (resolved == null) {
-            libraryNotice = "当前仅支持 SMB/NAS 文件的管理操作。"
-            return
-        }
-        val (config, remotePath) = resolved
-        scope.launch {
-            val resultMessage = when (request.action) {
-                FileAction.DELETE -> {
-                    val result = smbRepository.delete(config, remotePath, request.item.itemType == com.outfuseplayer.model.LibraryItemType.FOLDER)
-                    if (result.success) removeItemFromLibrary(request.item)
+    /** Downloads an item to the configured download folder; returns a result message. */
+    fun smbConfigForSource(sourceId: String): SmbConfig? {
+        SmbCredentialRegistry.find(sourceId)?.let { return it }
+        smbConfigJsonStore.find(sourceId)?.let { return it }
+        return smbConfigStore.takeIf { it.hasSaved() }
+            ?.loadLast()
+            ?.takeIf { it.sourceId == sourceId }
+    }
+
+    suspend fun downloadItemToLibrary(item: LibraryItem): String {
+        val outputSettings = SettingsStore(context).load()
+        val targetDir = MediaOutputRepository.downloadWorkingDirectory(context, outputSettings)
+        val uri = item.streamUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val scheme = uri?.scheme?.lowercase()
+        val message = when {
+            scheme == "smb" -> {
+                val config = smbConfigForSource(item.sourceId)
+                    ?: SmbCredentialRegistry.find(uri!!)
+                    ?: return "未找到该 SMB 来源配置。"
+                val remotePath = uri.pathSegments.drop(1).joinToString("\\").toRemotePath()
+                val result = smbRepository.download(config, remotePath, targetDir)
+                if (result.success && result.value != null) {
+                    MediaOutputRepository.exportDownloadedFile(context, outputSettings, result.value).message
+                } else {
                     result.message
-                }
-                FileAction.RENAME -> {
-                    val result = smbRepository.rename(config, remotePath, request.value)
-                    if (result.success) removeItemFromLibrary(request.item)
-                    result.message
-                }
-                FileAction.MOVE -> {
-                    val result = smbRepository.move(config, remotePath, request.value)
-                    if (result.success) removeItemFromLibrary(request.item)
-                    result.message
-                }
-                FileAction.DOWNLOAD -> {
-                    val result = smbRepository.download(
-                        config,
-                        remotePath,
-                        MediaOutputRepository.downloadWorkingDirectory(context, appSettings)
-                    )
-                    if (result.success && result.value != null) {
-                        MediaOutputRepository.exportDownloadedFile(context, appSettings, result.value).message
-                    } else {
-                        result.message
-                    }
                 }
             }
-            libraryNotice = resultMessage
+            scheme == WebDavUriScheme -> {
+                val config = remoteConfigStore.find(item.sourceId)
+                    ?: RemoteSourceRegistry.find(uri!!)
+                    ?: return "未找到该网盘来源配置。"
+                val remotePath = item.path
+                val result = webDavRepository.download(config, remotePath, targetDir)
+                if (result.success && result.value != null) {
+                    MediaOutputRepository.exportDownloadedFile(context, outputSettings, result.value).message
+                } else {
+                    result.message
+                }
+            }
+            scheme == "content" || scheme == "file" -> {
+                val name = item.originalTitle?.substringAfterLast('/')?.substringAfterLast('\\')
+                    ?: item.title.substringAfterLast('/').substringAfterLast('\\').ifBlank { "download" }
+                val result = MediaOutputRepository.copyDocumentToDownloadLocation(context, outputSettings, uri!!, name)
+                result.message
+            }
+            scheme == "http" || scheme == "https" -> {
+                val name = (item.originalTitle?.substringAfterLast('/')?.ifBlank { null }
+                    ?: item.title.substringAfterLast('/').ifBlank { "download" })
+                    .replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
+                runCatching {
+                    targetDir.mkdirs()
+                    val target = java.io.File(targetDir, name)
+                    val connection = URL(item.streamUrl).openConnection()
+                    connection.connectTimeout = 15_000
+                    connection.readTimeout = 30_000
+                    connection.getInputStream().use { input -> target.outputStream().use { output -> input.copyTo(output) } }
+                    MediaOutputRepository.exportDownloadedFile(context, outputSettings, target).message
+                }.getOrElse { e -> "下载失败：${e.message ?: e.javaClass.simpleName}" }
+            }
+            else -> "该来源暂不支持下载。"
         }
+        return message
+    }
+
+    fun handleFileAction(request: FileActionRequest) {
+        if (request.action != FileAction.DOWNLOAD) {
+            val resolved = configForItem(request.item)
+            if (resolved == null) {
+                libraryNotice = "当前仅支持 SMB/NAS 文件的管理操作。"
+                return
+            }
+            val (config, remotePath) = resolved
+            scope.launch {
+                val resultMessage = when (request.action) {
+                    FileAction.DELETE -> {
+                        val result = smbRepository.delete(config, remotePath, request.item.itemType == com.outfuseplayer.model.LibraryItemType.FOLDER)
+                        if (result.success) removeItemFromLibrary(request.item)
+                        result.message
+                    }
+                    FileAction.RENAME -> {
+                        val result = smbRepository.rename(config, remotePath, request.value)
+                        if (result.success) removeItemFromLibrary(request.item)
+                        result.message
+                    }
+                    FileAction.MOVE -> {
+                        val result = smbRepository.move(config, remotePath, request.value)
+                        if (result.success) removeItemFromLibrary(request.item)
+                        result.message
+                    }
+                    FileAction.DOWNLOAD -> downloadItemToLibrary(request.item)
+                }
+                libraryNotice = resultMessage
+            }
+            return
+        }
+        scope.launch { libraryNotice = downloadItemToLibrary(request.item) }
     }
 
     fun scanRemoteConfig(config: RemoteSourceConfig) {
@@ -1162,14 +1221,6 @@ private fun OutfuseAppContent(
         }
     }
 
-    fun smbConfigForSource(sourceId: String): SmbConfig? {
-        SmbCredentialRegistry.find(sourceId)?.let { return it }
-        smbConfigJsonStore.find(sourceId)?.let { return it }
-        return smbConfigStore.takeIf { it.hasSaved() }
-            ?.loadLast()
-            ?.takeIf { it.sourceId == sourceId }
-    }
-
     fun refreshCurrentLibrary(sourceId: String? = null) {
         if (appSettings.quickSyncDeletedFiles) {
             syncDeletedFilesQuick(sourceId)
@@ -1276,6 +1327,10 @@ private fun OutfuseAppContent(
 
     fun renameSeries(seriesId: String, name: String) {
         updateSeries(userSeriesStore.rename(userSeries, seriesId, name))
+    }
+
+    fun removeFromSeries(seriesId: String, itemId: String) {
+        updateSeries(userSeriesStore.removeItem(userSeries, itemId, seriesId))
     }
 
     LaunchedEffect(Unit) {
@@ -1486,6 +1541,8 @@ private fun OutfuseAppContent(
                 series = userSeries,
                 slideshowIntervalSeconds = appSettings.imageSlideshowIntervalSeconds,
                 onAddToSeries = ::addToSeries,
+                onRemoveFromSeries = ::removeFromSeries,
+                onRenameSeries = ::renameSeries,
                 onShowFileLocation = ::showFileLocation,
                 onAutoRemoveIfMissing = ::autoRemoveMissingPlaybackItem,
                 onBack = ::closePlayer
@@ -1584,6 +1641,7 @@ private fun OutfuseAppContent(
                     metadataState = metadataState,
                     sourceRevealItem = sourceRevealItem,
                     homeBrowseSection = homeBrowseSection,
+                    homeBrowseSeriesId = homeBrowseSeriesId,
                     appSettings = appSettings,
                     fileNameMode = fileNameMode,
                     startupDataRestored = startupDataRestored,
@@ -1599,10 +1657,27 @@ private fun OutfuseAppContent(
                     onAddToSeries = ::addToSeries,
                     onCreateSeries = ::createSeries,
                     onRenameSeries = ::renameSeries,
+                    onRemoveFromSeries = ::removeFromSeries,
+                    onDownloadItem = { item ->
+                        scope.launch {
+                            val message = downloadItemToLibrary(item)
+                            libraryNotice = message
+                            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onRemoveItemFromLibrary = { item ->
+                        removeItemFromLibrary(item)
+                        libraryNotice = "已从媒体库移除“${item.title}”"
+                    },
+                    onShowFileLocation = ::showFileLocation,
                     onSettingsChange = onSettingsChange,
-                    onHomeViewAll = { section -> homeBrowseSection = section },
+                    onHomeViewAll = { section, seriesId ->
+                        homeBrowseSection = section
+                        homeBrowseSeriesId = seriesId
+                    },
                     onCloseHomeViewAll = {
                         homeBrowseSection = null
+                        homeBrowseSeriesId = null
                     },
                     onSourceAdded = { source -> upsertSource(source) },
                     onSourceDeleted = ::deleteSource,
@@ -1663,6 +1738,7 @@ private fun OutfuseAppContent(
                     metadataState = metadataState,
                     sourceRevealItem = sourceRevealItem,
                     homeBrowseSection = homeBrowseSection,
+                    homeBrowseSeriesId = homeBrowseSeriesId,
                     appSettings = appSettings,
                     fileNameMode = fileNameMode,
                     startupDataRestored = startupDataRestored,
@@ -1678,10 +1754,27 @@ private fun OutfuseAppContent(
                     onAddToSeries = ::addToSeries,
                     onCreateSeries = ::createSeries,
                     onRenameSeries = ::renameSeries,
+                    onRemoveFromSeries = ::removeFromSeries,
+                    onDownloadItem = { item ->
+                        scope.launch {
+                            val message = downloadItemToLibrary(item)
+                            libraryNotice = message
+                            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onRemoveItemFromLibrary = { item ->
+                        removeItemFromLibrary(item)
+                        libraryNotice = "已从媒体库移除“${item.title}”"
+                    },
+                    onShowFileLocation = ::showFileLocation,
                     onSettingsChange = onSettingsChange,
-                    onHomeViewAll = { section -> homeBrowseSection = section },
+                    onHomeViewAll = { section, seriesId ->
+                        homeBrowseSection = section
+                        homeBrowseSeriesId = seriesId
+                    },
                     onCloseHomeViewAll = {
                         homeBrowseSection = null
+                        homeBrowseSeriesId = null
                     },
                     onSourceAdded = { source -> upsertSource(source) },
                     onSourceDeleted = ::deleteSource,
@@ -1725,6 +1818,7 @@ private fun AppContent(
     metadataState: MetadataMatchUiState?,
     sourceRevealItem: LibraryItem?,
     homeBrowseSection: HomeViewAllSection?,
+    homeBrowseSeriesId: String?,
     appSettings: AppSettings,
     fileNameMode: FileNameDisplayMode,
     startupDataRestored: Boolean,
@@ -1740,8 +1834,12 @@ private fun AppContent(
     onAddToSeries: (LibraryItem, String) -> Unit,
     onCreateSeries: (String, List<LibraryItem>) -> Unit,
     onRenameSeries: (String, String) -> Unit,
+    onRemoveFromSeries: (String, String) -> Unit,
+    onDownloadItem: (LibraryItem) -> Unit = {},
+    onRemoveItemFromLibrary: (LibraryItem) -> Unit = {},
+    onShowFileLocation: (LibraryItem) -> Unit = {},
     onSettingsChange: (AppSettings) -> Unit,
-    onHomeViewAll: (HomeViewAllSection) -> Unit,
+    onHomeViewAll: (HomeViewAllSection, String?) -> Unit,
     onCloseHomeViewAll: () -> Unit,
     onSourceAdded: (com.outfuseplayer.model.MediaSource) -> Unit,
     onSourceDeleted: (String) -> Unit,
@@ -1765,6 +1863,13 @@ private fun AppContent(
             onPlay = { onPlay(detailItem) },
             onAddToSeries = onAddToSeries,
             onRenameSeries = onRenameSeries,
+            onRemoveFromSeries = onRemoveFromSeries,
+            onDownload = { item -> onDownloadItem(item) },
+            onShowFileLocation = { item -> onShowFileLocation(item) },
+            onRemoveFromLibrary = { item ->
+                onRemoveItemFromLibrary(item)
+                onBackFromDetail()
+            },
             onItemClick = onOpenDetail
         )
         return
@@ -1775,6 +1880,7 @@ private fun AppContent(
             if (homeBrowseSection != null) {
                 HomeViewAllRoute(
                     section = homeBrowseSection,
+                    seriesId = homeBrowseSeriesId,
                     libraryItems = libraryItems,
                     series = userSeries,
                     mediaSources = mediaSources,
@@ -1923,6 +2029,7 @@ private fun AppContent(
 @Composable
 private fun HomeViewAllRoute(
     section: HomeViewAllSection,
+    seriesId: String?,
     libraryItems: List<LibraryItem>,
     series: List<UserSeries>,
     mediaSources: List<com.outfuseplayer.model.MediaSource>,
@@ -1937,15 +2044,28 @@ private fun HomeViewAllRoute(
     onCreateSeries: (String, List<LibraryItem>) -> Unit,
     onFileAction: (FileActionRequest) -> Unit
 ) {
-    var loading by remember(section, libraryItems.size, series.size) { mutableStateOf(true) }
-    var collection by remember(section, libraryItems.size, series.size) { mutableStateOf<List<LibraryItem>>(emptyList()) }
+    var loading by remember(section, libraryItems.size, series) { mutableStateOf(true) }
+    var collection by remember(section, libraryItems.size, series) { mutableStateOf<List<LibraryItem>>(emptyList()) }
 
-    LaunchedEffect(section, libraryItems.size, libraryItems.firstOrNull()?.id, libraryItems.lastOrNull()?.id, series.size) {
+    LaunchedEffect(
+        section,
+        seriesId,
+        libraryItems.size,
+        libraryItems.firstOrNull()?.id,
+        libraryItems.lastOrNull()?.id,
+        series.map { it.id to it.itemIds.size }
+    ) {
         loading = true
         collection = emptyList()
         val snapshot = copyLibraryItemsResponsively(libraryItems)
         val seriesIds = if (section == HomeViewAllSection.SERIES) {
-            withContext(Dispatchers.Default) { series.flatMap { it.itemIds }.toSet() }
+            withContext(Dispatchers.Default) {
+                if (seriesId != null) {
+                    series.firstOrNull { it.id == seriesId }?.itemIds?.toSet() ?: emptySet()
+                } else {
+                    series.flatMap { it.itemIds }.toSet()
+                }
+            }
         } else {
             emptySet()
         }
@@ -1958,13 +2078,14 @@ private fun HomeViewAllRoute(
     if (loading) {
         HomeViewAllLoadingScreen(title = section.title, expanded = expanded, onBack = onBack)
     } else {
+        val seriesTitle = seriesId?.let { id -> series.firstOrNull { it.id == id }?.name }
         LibraryScreen(
             items = collection,
             series = series,
             mediaSources = mediaSources,
             metadataState = metadataState,
             expanded = expanded,
-            title = section.title,
+            title = seriesTitle ?: section.title,
             subtitle = "首页集合 · 可排序、筛选、随机播放",
             itemsStableForBackgroundRead = true,
             fileNameMode = fileNameMode,

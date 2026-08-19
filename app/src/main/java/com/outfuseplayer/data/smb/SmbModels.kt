@@ -167,7 +167,7 @@ fun SmbConfig.toLibraryItem(entry: SmbEntry): LibraryItem {
         durationLabel = "SMB $mediaType",
         posterUrl = null,
         backdropUrl = null,
-        overview = "SMB 文件：${entry.path}\n大小：${entry.size.toReadableSize()}。当前版本不做刮削，只使用文件名、图片预览和视频缩略图入口。",
+        overview = "SMB 文件：${entry.path}\n大小：${entry.size.toReadableSize()}。",
         rating = "-",
         progress = 0f,
         resolution = resolution,

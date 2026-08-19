@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -45,16 +46,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -73,24 +83,184 @@ import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
 import java.nio.ByteBuffer
 
+/**
+ * Text that automatically scrolls horizontally when its content is wider than
+ * the available space, so an over-long series name never eats extra layout
+ * room. Falls back to a plain ellipsized single line while the text fits.
+ */
+@Composable
+fun MarqueeText(
+    text: String,
+    style: TextStyle = MaterialTheme.typography.bodyMedium,
+    color: Color = Color.White,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 1,
+    spacingDp: Dp = 0.dp
+) {
+    if (text.isEmpty()) return
+    BoxWithConstraints(modifier = modifier) {
+        val density = LocalDensity.current
+        val measurer: TextMeasurer = rememberTextMeasurer()
+        val textLayout = remember(text, style) {
+            measurer.measure(
+                text = text,
+                style = style,
+                constraints = Constraints(maxWidth = Int.MAX_VALUE)
+            )
+        }
+        val textWidthPx = textLayout.size.width
+        val textWidthDp = with(density) { textWidthPx.toDp() }
+        val spacingPx = with(density) { spacingDp.toPx() }
+        val availableWidthPx = with(density) { maxWidth.toPx() }.toInt()
+        val overflow = textWidthPx + spacingPx > availableWidthPx
+        if (!overflow) {
+            Text(
+                text = text,
+                style = style,
+                color = color,
+                maxLines = maxLines,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth()
+            )
+            return@BoxWithConstraints
+        }
+        // Scrolling marquee: move the text left until fully scrolled, then
+        // jump back to the start. The container clips the overflow.
+        val totalPx = (textWidthPx + spacingPx).toFloat()
+        val progress = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+        LaunchedEffect(text, style) {
+            var last = 0L
+            while (true) {
+                withFrameNanos { now ->
+                    if (last != 0L) {
+                        val delta = (now - last) / 1_000_000_000f
+                        progress.floatValue = (progress.floatValue + delta * 48f) % totalPx
+                    }
+                    last = now
+                }
+            }
+        }
+        val offsetX = (-progress.floatValue).coerceIn(-totalPx, 0f)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clipToBounds()
+        ) {
+            Text(
+                text = text,
+                style = style,
+                color = color,
+                maxLines = maxLines,
+                softWrap = false,
+                modifier = Modifier
+                    .width(textWidthDp)
+                    .graphicsLayer {
+                        translationX = offsetX
+                    }
+            )
+        }
+    }
+}
+
+/**
+ * 4-thumbnail grid card for a series collection on Home. Shows the first four
+ * items as a 2x2 collage plus the series name; no per-item series badge.
+ */
+@Composable
+fun SeriesGridCard(
+    name: String,
+    items: List<LibraryItem>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    width: Dp = 148.dp,
+    itemCount: Int? = null
+) {
+    val thumbSize = (width - 4.dp) / 2f
+    Column(
+        modifier = modifier
+            .width(width)
+            .clickable(onClick = onClick)
+    ) {
+        // 2x2 collage of the first four items.
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                SeriesGridThumb(item = items.getOrNull(0), size = thumbSize)
+                SeriesGridThumb(item = items.getOrNull(1), size = thumbSize)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                SeriesGridThumb(item = items.getOrNull(2), size = thumbSize)
+                SeriesGridThumb(item = items.getOrNull(3), size = thumbSize)
+            }
+        }
+        Spacer(modifier = Modifier.height(7.dp))
+        MarqueeText(
+            text = name,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 1
+        )
+        if (itemCount != null) {
+            Text(
+                text = "$itemCount 个媒体",
+                style = MaterialTheme.typography.labelMedium,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SeriesGridThumb(item: LibraryItem?, size: Dp) {
+    val shape = RoundedCornerShape(7.dp)
+    if (item == null) {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .clip(shape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        )
+        return
+    }
+    if (item.posterUrl != null) {
+        PosterImage(
+            url = item.posterUrl,
+            contentDescription = item.title,
+            modifier = Modifier
+                .size(size)
+                .clip(shape)
+        )
+    } else {
+        FilePreviewThumb(
+            item = item,
+            modifier = Modifier
+                .size(size)
+                .clip(shape)
+        )
+    }
+}
+
 @Composable
 fun SectionHeader(
     title: String,
     action: String? = null,
     onActionClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
-) {
-    Row(
+) {    Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(
+        MarqueeText(
             text = title,
             style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+            maxLines = 1
         )
         if (action != null && onActionClick != null) {
             Text(
@@ -126,8 +296,7 @@ fun MediaRail(
                     item = item,
                     onClick = { onItemClick(item) },
                     width = posterWidth,
-                    fileNameMode = fileNameMode,
-                    seriesLabels = series.labelsFor(item)
+                    fileNameMode = fileNameMode
                 )
             }
         }
@@ -179,7 +348,6 @@ fun PosterCard(
                             .height(3.dp)
                     )
                 }
-                SeriesBadge(labels = seriesLabels, modifier = Modifier.align(Alignment.TopStart))
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
@@ -200,28 +368,6 @@ fun PosterCard(
         )
     }
 }
-
-@Composable
-private fun SeriesBadge(labels: List<String>, modifier: Modifier = Modifier) {
-    val first = labels.firstOrNull() ?: return
-    Surface(
-        modifier = modifier.padding(6.dp),
-        shape = RoundedCornerShape(5.dp),
-        color = PrimaryOrange.copy(alpha = 0.88f)
-    ) {
-        Text(
-            text = if (labels.size > 1) "$first +${labels.size - 1}" else first,
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-        )
-    }
-}
-
-private fun List<UserSeries>.labelsFor(item: LibraryItem): List<String> =
-    filter { item.id in it.itemIds }.map { it.name }
 
 @Composable
 fun FilePreviewThumb(

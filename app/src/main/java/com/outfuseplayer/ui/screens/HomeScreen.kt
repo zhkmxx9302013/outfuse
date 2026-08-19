@@ -59,6 +59,8 @@ import com.outfuseplayer.ui.components.FilePreviewThumb
 import com.outfuseplayer.ui.components.MediaRail
 import com.outfuseplayer.ui.components.PrimaryPlayButton
 import com.outfuseplayer.ui.components.RatingBadge
+import com.outfuseplayer.ui.components.SectionHeader
+import com.outfuseplayer.ui.components.SeriesGridCard
 import com.outfuseplayer.ui.components.TechBadge
 import com.outfuseplayer.ui.theme.ElectricBlue
 import com.outfuseplayer.ui.theme.PrimaryAmber
@@ -163,7 +165,7 @@ fun HomeScreen(
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     onItemClick: (LibraryItem) -> Unit,
     onPlay: (LibraryItem) -> Unit,
-    onViewAll: (HomeViewAllSection) -> Unit,
+    onViewAll: (HomeViewAllSection, String?) -> Unit,
     onSearch: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -186,13 +188,17 @@ fun HomeScreen(
     val played = remember(allItems.size) { allItems.homeSectionPreview(HomeViewAllSection.PLAYED) }
     val unplayed = remember(allItems.size) { allItems.homeSectionPreview(HomeViewAllSection.UNPLAYED) }
     val allMedia = remember(allItems.size) { allItems.homeSectionPreview(HomeViewAllSection.ALL) }
-    val seriesItems = remember(allItems.size, series.size) {
-        val wantedIds = series.asSequence()
-            .flatMap { it.itemIds.asSequence() }
-            .distinct()
-            .take(HomeRailPreviewLimit)
-            .toSet()
-        allItems.homeSectionPreview(HomeViewAllSection.SERIES, wantedIds)
+    // Keyed on the series content itself (ids + sizes) so adding a video to an
+    // existing series re-renders the home rail without waiting for a size change.
+    val seriesFingerprint = remember(series) {
+        series.joinToString("|") { "${it.id}:${it.itemIds.size}" }
+    }
+    val seriesRails = remember(allItems.size, seriesFingerprint) {
+        val byId = allItems.associateBy { it.id }
+        series.mapNotNull { s ->
+            val items = s.itemIds.mapNotNull { byId[it] }.take(HomeRailPreviewLimit)
+            if (items.isEmpty()) null else s to items
+        }
     }
 
     LazyColumn(
@@ -247,7 +253,7 @@ fun HomeScreen(
                 series = series,
                 fileNameMode = fileNameMode,
                 action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.CONTINUE_WATCHING) }
+                onActionClick = { onViewAll(HomeViewAllSection.CONTINUE_WATCHING, null) }
             )
         }
         if (showPlayed && played.isNotEmpty()) item {
@@ -259,7 +265,7 @@ fun HomeScreen(
                 series = series,
                 fileNameMode = fileNameMode,
                 action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.PLAYED) }
+                onActionClick = { onViewAll(HomeViewAllSection.PLAYED, null) }
             )
         }
         if (showUnplayed && unplayed.isNotEmpty()) item {
@@ -271,7 +277,7 @@ fun HomeScreen(
                 series = series,
                 fileNameMode = fileNameMode,
                 action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.UNPLAYED) }
+                onActionClick = { onViewAll(HomeViewAllSection.UNPLAYED, null) }
             )
         }
         if (showRecent && recent.isNotEmpty()) item {
@@ -283,7 +289,7 @@ fun HomeScreen(
                 series = series,
                 fileNameMode = fileNameMode,
                 action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.RECENT) }
+                onActionClick = { onViewAll(HomeViewAllSection.RECENT, null) }
             )
         }
         if (showAll && allMedia.isNotEmpty()) item {
@@ -295,7 +301,7 @@ fun HomeScreen(
                 series = series,
                 fileNameMode = fileNameMode,
                 action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.ALL) }
+                onActionClick = { onViewAll(HomeViewAllSection.ALL, null) }
             )
         }
         if (showMovies && movies.isNotEmpty()) item {
@@ -307,7 +313,7 @@ fun HomeScreen(
                 series = series,
                 fileNameMode = fileNameMode,
                 action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.MOVIES) }
+                onActionClick = { onViewAll(HomeViewAllSection.MOVIES, null) }
             )
         }
         if (showShows && shows.isNotEmpty()) item {
@@ -319,20 +325,30 @@ fun HomeScreen(
                 series = series,
                 fileNameMode = fileNameMode,
                 action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.SHOWS) }
+                onActionClick = { onViewAll(HomeViewAllSection.SHOWS, null) }
             )
         }
-        if (showSeries && seriesItems.isNotEmpty()) item {
-            MediaRail(
-                title = "自建系列",
-                items = seriesItems,
-                onItemClick = onItemClick,
-                posterWidth = if (expanded) 138.dp else 116.dp,
-                series = series,
-                fileNameMode = fileNameMode,
-                action = "查看全部",
-                onActionClick = { onViewAll(HomeViewAllSection.SERIES) }
-            )
+        if (showSeries && seriesRails.isNotEmpty()) item {
+            Column {
+                SectionHeader(
+                    title = "自建系列",
+                    action = "查看全部",
+                    onActionClick = { onViewAll(HomeViewAllSection.SERIES, null) }
+                )
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    items(seriesRails, key = { it.first.id }) { (collection, items) ->
+                        SeriesGridCard(
+                            name = collection.name,
+                            items = items,
+                            itemCount = collection.itemIds.size,
+                            onClick = { onViewAll(HomeViewAllSection.SERIES, collection.id) }
+                        )
+                    }
+                }
+            }
         }
     }
 }

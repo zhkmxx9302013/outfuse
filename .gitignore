@@ -13,6 +13,9 @@ android-sdk/
 # 运营/营销内容，不入库
 /marketing/
 
+# 营销封面生成脚本（依赖 marketing/，不入库）
+/scripts/
+
 # 本地 Gradle 缓存（构建加速用）
 /.gradle-home/
 

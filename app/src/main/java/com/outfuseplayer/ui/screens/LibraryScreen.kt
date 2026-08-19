@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.MoreVert
@@ -111,6 +112,7 @@ private object LibraryScrollMemory {
     var sortAscending: Boolean = true
     var layoutName: String = MediaLayout.LARGE.name
     var sourceFilterId: String? = null
+    var seriesFilterId: String? = null
     var gridFirstVisibleItemIndex: Int = 0
     var gridFirstVisibleItemScrollOffset: Int = 0
     var listFirstVisibleItemIndex: Int = 0
@@ -157,6 +159,7 @@ fun LibraryScreen(
     var sortAscending by rememberSaveable { mutableStateOf(if (useSharedScrollMemory) LibraryScrollMemory.sortAscending else true) }
     var layoutName by rememberSaveable { mutableStateOf(if (useSharedScrollMemory) LibraryScrollMemory.layoutName else MediaLayout.LARGE.name) }
     var sourceFilterId by rememberSaveable { mutableStateOf<String?>(if (useSharedScrollMemory) LibraryScrollMemory.sourceFilterId else null) }
+    var seriesFilterId by rememberSaveable { mutableStateOf<String?>(if (useSharedScrollMemory) LibraryScrollMemory.seriesFilterId else null) }
     var actionTarget by remember { mutableStateOf<LibraryItem?>(null) }
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     var selectedIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
@@ -189,6 +192,7 @@ fun LibraryScreen(
         initialValue = LibraryProjection.loading(items.size),
         projectionKey,
         sourceFilterId,
+        seriesFilterId,
         filter,
         sort,
         sortAscending
@@ -203,9 +207,18 @@ fun LibraryScreen(
         } else {
             collectionSeriesIds.toSet()
         }
+        val seriesItemsSnapshot = if (itemsStableForBackgroundRead) {
+            withContext(Dispatchers.Default) {
+                val wanted = seriesFilterId?.let { id -> series.firstOrNull { it.id == id }?.itemIds?.toSet() }
+                wanted ?: emptySet()
+            }
+        } else {
+            val wanted = seriesFilterId?.let { id -> series.firstOrNull { it.id == id }?.itemIds?.toSet() }
+            wanted ?: emptySet()
+        }
         value = LibraryProjection.loading(snapshot.size)
         value = withContext(Dispatchers.Default) {
-            buildLibraryProjection(snapshot, sourceFilterId, filter, sort, sortAscending, collectionSection, seriesIdSnapshot)
+            buildLibraryProjection(snapshot, sourceFilterId, seriesItemsSnapshot, filter, sort, sortAscending, collectionSection, seriesIdSnapshot)
         }
     }
     val filtered = projection.filtered
@@ -236,13 +249,14 @@ fun LibraryScreen(
         }
     }
 
-    LaunchedEffect(filterName, sortName, sortAscending, layoutName, sourceFilterId, useSharedScrollMemory) {
+    LaunchedEffect(filterName, sortName, sortAscending, layoutName, sourceFilterId, seriesFilterId, useSharedScrollMemory) {
         if (!useSharedScrollMemory) return@LaunchedEffect
         LibraryScrollMemory.filterName = filterName
         LibraryScrollMemory.sortName = sortName
         LibraryScrollMemory.sortAscending = sortAscending
         LibraryScrollMemory.layoutName = layoutName
         LibraryScrollMemory.sourceFilterId = sourceFilterId
+        LibraryScrollMemory.seriesFilterId = seriesFilterId
     }
 
     LaunchedEffect(filtered.size, selectionMode) {
@@ -275,6 +289,9 @@ fun LibraryScreen(
             sources = mediaSources,
             selectedSourceId = sourceFilterId,
             onSourceSelected = { sourceFilterId = it },
+            series = series,
+            selectedSeriesId = seriesFilterId,
+            onSeriesSelected = { seriesFilterId = it },
             sort = sort,
             sortAscending = sortAscending,
             onSort = { option ->
@@ -448,7 +465,6 @@ private fun LibraryTopBar(
                 append("共 ${stats.total} 项")
                 if (stats.videos > 0) append(" · 视频 ${stats.videos}")
                 if (stats.images > 0) append(" · 图片 ${stats.images}")
-                if (stats.files > 0) append(" · 文件 ${stats.files}")
             },
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -517,6 +533,9 @@ private fun LibraryOptionRow(
     sources: List<MediaSource>,
     selectedSourceId: String?,
     onSourceSelected: (String?) -> Unit,
+    series: List<UserSeries>,
+    selectedSeriesId: String?,
+    onSeriesSelected: (String?) -> Unit,
     sort: MediaSort,
     sortAscending: Boolean,
     onSort: (MediaSort) -> Unit,
@@ -524,64 +543,102 @@ private fun LibraryOptionRow(
     onLayout: (MediaLayout) -> Unit,
     expanded: Boolean
 ) {
+    var filtersOpen by rememberSaveable { mutableStateOf(false) }
     val selectedSourceName = sources.firstOrNull { it.id == selectedSourceId }?.name
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = if (expanded) 32.dp else 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.padding(bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+    val selectedSeriesName = series.firstOrNull { it.id == selectedSeriesId }?.name
+    val activeFilterCount = listOf(
+        if (filter != LibraryFilter.ALL) 1 else 0,
+        if (selectedSourceId != null) 1 else 0,
+        if (selectedSeriesId != null) 1 else 0
+    ).sum()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp)
+            .padding(horizontal = if (expanded) 32.dp else 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item {
-            OptionDropdown(
-                label = "类型：${filter.label}",
-                options = LibraryFilter.entries.map { it.label },
-                selectedLabel = filter.label,
-                onSelected = { index -> onFilter(LibraryFilter.entries[index]) }
-            )
+        // Collapsible filters: one compact toggle; expands to the full row.
+        OutlinedButton(
+            onClick = { filtersOpen = !filtersOpen },
+            shape = RoundedCornerShape(7.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+            border = BorderStroke(1.dp, if (filtersOpen || activeFilterCount > 0) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = if (filtersOpen || activeFilterCount > 0) PrimaryOrange else MaterialTheme.colorScheme.onSurface)
+        ) {
+            Icon(Icons.Outlined.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(if (activeFilterCount > 0) "筛选($activeFilterCount)" else "筛选")
         }
-        if (sources.isNotEmpty()) {
-            item {
-                OptionDropdown(
-                    label = "来源：${selectedSourceName ?: "全部"}",
-                    options = listOf("全部媒体库") + sources.map { it.name },
-                    selectedLabel = selectedSourceName ?: "全部媒体库",
-                    onSelected = { index ->
-                        onSourceSelected(if (index == 0) null else sources[index - 1].id)
-                    }
-                )
+        OptionDropdown(
+            label = "排序：${sort.label}${if (sortAscending) " ↑" else " ↓"}",
+            options = MediaSort.entries.map { it.label },
+            selectedLabel = sort.label,
+            onSelected = { index -> onSort(MediaSort.entries[index]) }
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            MediaLayout.entries.forEach { option ->
+                val active = layout == option
+                IconButton(
+                    onClick = { onLayout(option) },
+                    modifier = Modifier
+                        .size(34.dp)
+                        .then(
+                            if (active) {
+                                Modifier.background(PrimaryOrange.copy(alpha = 0.14f), RoundedCornerShape(7.dp))
+                            } else {
+                                Modifier
+                            }
+                        )
+                ) {
+                    Icon(
+                        option.icon,
+                        contentDescription = option.label,
+                        tint = if (active) PrimaryOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
-        item {
-            OptionDropdown(
-                label = "排序：${sort.label}${if (sortAscending) " ↑" else " ↓"}",
-                options = MediaSort.entries.map { it.label },
-                selectedLabel = sort.label,
-                onSelected = { index -> onSort(MediaSort.entries[index]) }
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                MediaLayout.entries.forEach { option ->
-                    val active = layout == option
-                    IconButton(
-                        onClick = { onLayout(option) },
-                        modifier = Modifier
-                            .size(34.dp)
-                            .then(
-                                if (active) {
-                                    Modifier.background(PrimaryOrange.copy(alpha = 0.14f), RoundedCornerShape(7.dp))
-                                } else {
-                                    Modifier
-                                }
-                            )
-                    ) {
-                        Icon(
-                            option.icon,
-                            contentDescription = option.label,
-                            tint = if (active) PrimaryOrange else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+    }
+    if (filtersOpen) {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = if (expanded) 32.dp else 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            item {
+                OptionDropdown(
+                    label = "类型：${filter.label}",
+                    options = LibraryFilter.entries.map { it.label },
+                    selectedLabel = filter.label,
+                    onSelected = { index -> onFilter(LibraryFilter.entries[index]) }
+                )
+            }
+            if (sources.isNotEmpty()) {
+                item {
+                    OptionDropdown(
+                        label = "来源：${selectedSourceName ?: "全部"}",
+                        options = listOf("全部媒体库") + sources.map { it.name },
+                        selectedLabel = selectedSourceName ?: "全部媒体库",
+                        onSelected = { index ->
+                            onSourceSelected(if (index == 0) null else sources[index - 1].id)
+                        }
+                    )
+                }
+            }
+            if (series.isNotEmpty()) {
+                item {
+                    OptionDropdown(
+                        label = "系列：${selectedSeriesName ?: "全部"}",
+                        options = listOf("全部系列") + series.map { it.name },
+                        selectedLabel = selectedSeriesName ?: "全部系列",
+                        onSelected = { index ->
+                            onSeriesSelected(if (index == 0) null else series[index - 1].id)
+                        }
+                    )
                 }
             }
         }
@@ -830,8 +887,7 @@ private fun LibraryGrid(
                     onClick = { onItemClick(item) },
                     width = if (layout == MediaLayout.LARGE) 152.dp else 112.dp,
                     modifier = Modifier.fillMaxWidth(),
-                    fileNameMode = fileNameMode,
-                    seriesLabels = series.labelsFor(item)
+                    fileNameMode = fileNameMode
                 )
                 if (selectionMode) {
                     SelectionMark(
@@ -880,7 +936,6 @@ private fun LibraryList(
         items(items, key = { it.id }) { item ->
             LibraryListRow(
                 item = item,
-                seriesLabels = series.labelsFor(item),
                 selectionMode = selectionMode,
                 selected = item.id in selectedIds,
                 fileNameMode = fileNameMode,
@@ -894,7 +949,6 @@ private fun LibraryList(
 @Composable
 private fun LibraryListRow(
     item: LibraryItem,
-    seriesLabels: List<String>,
     selectionMode: Boolean,
     selected: Boolean,
     fileNameMode: FileNameDisplayMode,
@@ -928,7 +982,6 @@ private fun LibraryListRow(
                 } else {
                     PosterImage(item.posterUrl, item.title, Modifier.fillMaxSize())
                 }
-                SeriesBadge(seriesLabels, modifier = Modifier.align(Alignment.TopStart))
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 FileNameText(
@@ -1091,6 +1144,7 @@ private data class LibraryProjectionKey(
 private fun buildLibraryProjection(
     items: List<LibraryItem>,
     sourceFilterId: String?,
+    seriesFilterIds: Set<String>,
     filter: LibraryFilter,
     sort: MediaSort,
     sortAscending: Boolean,
@@ -1101,7 +1155,12 @@ private fun buildLibraryProjection(
         items.homeSectionItems(section, collectionSeriesIds)
     } ?: items
     val sourceFiltered = sourceFilterId?.let { id -> scoped.filter { it.sourceId == id } } ?: scoped
-    val filtered = sourceFiltered.asSequence()
+    val seriesFiltered = if (seriesFilterIds.isEmpty()) {
+        sourceFiltered
+    } else {
+        sourceFiltered.filter { it.id in seriesFilterIds }
+    }
+    val filtered = seriesFiltered.asSequence()
         .filter { it.matchesLibraryFilter(filter) }
         .toList()
         .sortedLibraryFor(sort, sortAscending)
@@ -1143,28 +1202,6 @@ private fun LibraryItem.matchesLibraryFilter(filter: LibraryFilter): Boolean =
         LibraryFilter.MOVIES -> itemType == LibraryItemType.MOVIE
         LibraryFilter.SHOWS -> itemType == LibraryItemType.SHOW
     }
-
-@Composable
-private fun SeriesBadge(labels: List<String>, modifier: Modifier = Modifier) {
-    val first = labels.firstOrNull() ?: return
-    Surface(
-        modifier = modifier.padding(5.dp),
-        shape = RoundedCornerShape(5.dp),
-        color = PrimaryOrange.copy(alpha = 0.88f)
-    ) {
-        Text(
-            text = if (labels.size > 1) "$first +${labels.size - 1}" else first,
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-        )
-    }
-}
-
-private fun List<UserSeries>.labelsFor(item: LibraryItem): List<String> =
-    filter { item.id in it.itemIds }.map { it.name }
 
 private fun LibraryItem.navigationLabel(sort: MediaSort): String = when (sort) {
     MediaSort.NAME -> title.firstOrNull()?.uppercaseChar()?.toString() ?: "#"

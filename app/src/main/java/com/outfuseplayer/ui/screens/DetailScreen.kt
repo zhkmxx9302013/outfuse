@@ -1,4 +1,4 @@
-﻿package com.outfuseplayer.ui.screens
+package com.outfuseplayer.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -28,14 +28,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -43,6 +52,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -61,6 +72,7 @@ import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.ui.components.AvatarImage
 import com.outfuseplayer.ui.components.BackdropImage
 import com.outfuseplayer.ui.components.FilePreviewThumb
+import com.outfuseplayer.ui.components.MarqueeText
 import com.outfuseplayer.ui.components.MediaRail
 import com.outfuseplayer.ui.components.PosterImage
 import com.outfuseplayer.ui.components.PrimaryPlayButton
@@ -72,6 +84,7 @@ import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(
     item: LibraryItem,
@@ -82,9 +95,17 @@ fun DetailScreen(
     onPlay: () -> Unit,
     onAddToSeries: (LibraryItem, String) -> Unit,
     onRenameSeries: (String, String) -> Unit,
+    onRemoveFromSeries: (String, String) -> Unit,
+    onDownload: ((LibraryItem) -> Unit)? = null,
+    onShowFileLocation: ((LibraryItem) -> Unit)? = null,
+    onRemoveFromLibrary: ((LibraryItem) -> Unit)? = null,
     onItemClick: (LibraryItem) -> Unit
 ) {
     BackHandler(onBack = onBack)
+    val context = LocalContext.current
+    var showFavoritesSheet by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    val inAnySeries = series.any { item.id in it.itemIds }
     Box(modifier = Modifier.fillMaxSize()) {
         if (item.backdropUrl == null && item.streamUrl != null && item.itemType in setOf(LibraryItemType.VIDEO_FILE, LibraryItemType.IMAGE)) {
             Box(
@@ -120,7 +141,27 @@ fun DetailScreen(
                 .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
         ) {
-            DetailTopBar(onBack = onBack)
+            DetailTopBar(
+                onBack = onBack,
+                inAnySeries = inAnySeries,
+                onToggleFavorite = {
+                    if (inAnySeries) {
+                        // Un-favorite: remove from every series containing it.
+                        series.filter { item.id in it.itemIds }.forEach { onRemoveFromSeries(it.id, item.id) }
+                        android.widget.Toast.makeText(context, "已取消收藏", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        showFavoritesSheet = true
+                    }
+                },
+                showMoreMenu = showMoreMenu,
+                onToggleMoreMenu = { showMoreMenu = !showMoreMenu },
+                onDismissMoreMenu = { showMoreMenu = false },
+                moreMenuItems = listOfNotNull(
+                    onDownload?.let { "下载" to { showMoreMenu = false; it(item) } },
+                    onShowFileLocation?.let { "显示文件位置" to { showMoreMenu = false; it(item) } },
+                    onRemoveFromLibrary?.let { "从媒体库移除" to { showMoreMenu = false; it(item) } }
+                )
+            )
             Spacer(modifier = Modifier.height(if (expanded) 172.dp else 118.dp))
             if (expanded) {
                 Row(
@@ -136,8 +177,9 @@ fun DetailScreen(
                         series = series,
                         expanded = true,
                         onPlay = onPlay,
-                        onAddToSeries = onAddToSeries,
-                        onRenameSeries = onRenameSeries,
+                        onRemoveFromSeries = onRemoveFromSeries,
+                        onOpenFavorites = { showFavoritesSheet = true },
+                        onDownload = onDownload?.let { download -> { download(item) } },
                         modifier = Modifier
                             .weight(1f)
                             .widthIn(max = 720.dp)
@@ -157,8 +199,9 @@ fun DetailScreen(
                         series = series,
                         expanded = false,
                         onPlay = onPlay,
-                        onAddToSeries = onAddToSeries,
-                        onRenameSeries = onRenameSeries,
+                        onRemoveFromSeries = onRemoveFromSeries,
+                        onOpenFavorites = { showFavoritesSheet = true },
+                        onDownload = onDownload?.let { download -> { download(item) } },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -172,10 +215,134 @@ fun DetailScreen(
             )
         }
     }
+    if (showFavoritesSheet) {
+        SeriesFavoritesSheet(
+            item = item,
+            series = series,
+            onAddToSeries = { name -> onAddToSeries(item, name) },
+            onRemoveFromSeries = { seriesId -> onRemoveFromSeries(seriesId, item.id) },
+            onRenameSeries = onRenameSeries,
+            onDismiss = { showFavoritesSheet = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SeriesFavoritesSheet(
+    item: LibraryItem,
+    series: List<UserSeries>,
+    onAddToSeries: (String) -> Unit,
+    onRemoveFromSeries: (String) -> Unit,
+    onRenameSeries: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var editingSeries by remember { mutableStateOf<UserSeries?>(null) }
+    var newName by remember { mutableStateOf("") }
+    val isEditing = editingSeries != null
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = if (isEditing) "编辑系列名称" else "收藏到系列",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = if (isEditing) "修改「${editingSeries?.name}」的名称。" else "勾选要加入的系列，或新建一个系列。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted
+            )
+            if (series.isNotEmpty()) {
+                series.forEach { collection ->
+                    val contains = item.id in collection.itemIds
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                if (contains) onRemoveFromSeries(collection.id) else onAddToSeries(collection.name)
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = contains,
+                            onCheckedChange = { checked ->
+                                if (checked) onAddToSeries(collection.name) else onRemoveFromSeries(collection.id)
+                            }
+                        )
+                        MarqueeText(
+                            text = collection.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (contains) PrimaryOrange else MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = {
+                            editingSeries = collection
+                            newName = collection.name
+                        }) {
+                            Icon(Icons.Outlined.Edit, contentDescription = "编辑名称", tint = TextMuted)
+                        }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text(if (isEditing) "系列名称" else "新系列名称") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Surface2.copy(alpha = 0.66f),
+                        unfocusedContainerColor = Surface2.copy(alpha = 0.66f),
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedLabelColor = PrimaryOrange,
+                        unfocusedLabelColor = TextMuted,
+                        cursorColor = PrimaryOrange
+                    )
+                )
+                Button(
+                    onClick = {
+                        val name = newName.trim().ifBlank { return@Button }
+                        if (isEditing) {
+                            editingSeries?.let { onRenameSeries(it.id, name) }
+                            editingSeries = null
+                        } else {
+                            onAddToSeries(name)
+                        }
+                        newName = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange, contentColor = Color.White)
+                ) {
+                    Text(if (isEditing) "保存" else "新建")
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun DetailTopBar(onBack: () -> Unit) {
+private fun DetailTopBar(
+    onBack: () -> Unit,
+    inAnySeries: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    showMoreMenu: Boolean = false,
+    onToggleMoreMenu: (() -> Unit)? = null,
+    onDismissMoreMenu: (() -> Unit)? = null,
+    moreMenuItems: List<Pair<String, () -> Unit>> = emptyList()
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -188,11 +355,35 @@ private fun DetailTopBar(onBack: () -> Unit) {
             Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = Color.White)
         }
         Row {
-            IconButton(onClick = {}) {
-                Icon(Icons.Outlined.BookmarkBorder, contentDescription = "收藏", tint = Color.White)
+            if (onToggleFavorite != null) {
+                IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        if (inAnySeries) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                        contentDescription = if (inAnySeries) "取消收藏" else "收藏",
+                        tint = if (inAnySeries) PrimaryOrange else Color.White
+                    )
+                }
             }
-            IconButton(onClick = {}) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "更多", tint = Color.White)
+            Box {
+                IconButton(
+                    onClick = onToggleMoreMenu ?: {},
+                    enabled = moreMenuItems.isNotEmpty()
+                ) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "更多", tint = Color.White)
+                }
+                if (showMoreMenu && onDismissMoreMenu != null) {
+                    DropdownMenu(
+                        expanded = true,
+                        onDismissRequest = onDismissMoreMenu
+                    ) {
+                        moreMenuItems.forEach { (label, action) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = action
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -231,17 +422,11 @@ private fun DetailCopy(
     series: List<UserSeries>,
     expanded: Boolean,
     onPlay: () -> Unit,
-    onAddToSeries: (LibraryItem, String) -> Unit,
-    onRenameSeries: (String, String) -> Unit,
+    onRemoveFromSeries: (String, String) -> Unit,
+    onOpenFavorites: () -> Unit,
+    onDownload: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val firstSeries = series.firstOrNull()
-    var seriesName by rememberSaveable(series.firstOrNull()?.id) {
-        mutableStateOf(firstSeries?.name ?: "我的系列")
-    }
-    var selectedSeriesId by rememberSaveable(series.joinToString("|") { it.id }) {
-        mutableStateOf(firstSeries?.id)
-    }
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -280,31 +465,21 @@ private fun DetailCopy(
             Surface(
                 modifier = Modifier
                     .size(48.dp)
-                    .clickable(onClick = {}),
+                    .clickable(enabled = onDownload != null, onClick = onDownload ?: {}),
                 shape = RoundedCornerShape(7.dp),
                 color = Color.White.copy(alpha = 0.1f),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.Download, contentDescription = "缓存", tint = Color.White)
+                    Icon(Icons.Outlined.Download, contentDescription = "下载", tint = Color.White)
                 }
             }
         }
         SeriesEditor(
             item = item,
             series = series,
-            selectedSeriesId = selectedSeriesId,
-            onSelectSeries = { selected ->
-                selectedSeriesId = selected.id
-                seriesName = selected.name
-            },
-            seriesName = seriesName,
-            onSeriesNameChange = { seriesName = it },
-            onAddToSeries = { onAddToSeries(item, seriesName) },
-            onRenameSeries = {
-                val selected = selectedSeriesId
-                if (selected != null) onRenameSeries(selected, seriesName) else onAddToSeries(item, seriesName)
-            }
+            onRemoveFromSeries = { onRemoveFromSeries(it, item.id) },
+            onOpenFavorites = onOpenFavorites
         )
     }
 }
@@ -313,84 +488,51 @@ private fun DetailCopy(
 private fun SeriesEditor(
     item: LibraryItem,
     series: List<UserSeries>,
-    selectedSeriesId: String?,
-    onSelectSeries: (UserSeries) -> Unit,
-    seriesName: String,
-    onSeriesNameChange: (String) -> Unit,
-    onAddToSeries: () -> Unit,
-    onRenameSeries: () -> Unit
+    onRemoveFromSeries: (String) -> Unit,
+    onOpenFavorites: () -> Unit
 ) {
-    val inSeries = series.any { item.id in it.itemIds }
+    val containsSeries = series.filter { item.id in it.itemIds }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (series.isNotEmpty()) {
+        if (containsSeries.isNotEmpty()) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(series, key = { it.id }) { collection ->
-                    val selected = collection.id == selectedSeriesId
-                    val contains = item.id in collection.itemIds
+                items(containsSeries, key = { it.id }) { collection ->
                     Surface(
-                        modifier = Modifier.clickable { onSelectSeries(collection) },
+                        modifier = Modifier.clickable(onClick = onOpenFavorites),
                         shape = RoundedCornerShape(7.dp),
-                        color = when {
-                            contains -> PrimaryOrange.copy(alpha = 0.22f)
-                            selected -> Color.White.copy(alpha = 0.14f)
-                            else -> Color.White.copy(alpha = 0.08f)
-                        },
-                        border = BorderStroke(1.dp, if (contains || selected) PrimaryOrange.copy(alpha = 0.46f) else Color.White.copy(alpha = 0.1f))
+                        color = PrimaryOrange.copy(alpha = 0.22f),
+                        border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.46f))
                     ) {
-                        Text(
-                            text = if (contains) "${collection.name} ✓" else collection.name,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (contains || selected) PrimaryOrange else Color.White,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
+                        ) {
+                            Text(
+                                text = collection.name,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = PrimaryOrange,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 160.dp)
+                            )
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = "从该系列移除",
+                                tint = PrimaryOrange,
+                                modifier = Modifier
+                                    .padding(start = 4.dp)
+                                    .size(18.dp)
+                                    .clickable { onRemoveFromSeries(collection.id) }
+                            )
+                        }
                     }
                 }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextField(
-                value = seriesName,
-                onValueChange = onSeriesNameChange,
-                modifier = Modifier.weight(1f),
-                label = { Text("系列名称") },
-                singleLine = true,
-                shape = RoundedCornerShape(8.dp),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Surface2.copy(alpha = 0.66f),
-                    unfocusedContainerColor = Surface2.copy(alpha = 0.66f),
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedLabelColor = PrimaryOrange,
-                    unfocusedLabelColor = TextMuted,
-                    cursorColor = PrimaryOrange
-                )
+        } else {
+            Text(
+                text = "未加入任何系列，点右上角收藏图标管理。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted
             )
-            Surface(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clickable(onClick = onAddToSeries),
-                shape = RoundedCornerShape(7.dp),
-                color = if (inSeries) PrimaryOrange.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.1f),
-                border = BorderStroke(1.dp, if (inSeries) PrimaryOrange.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.12f))
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.BookmarkBorder, contentDescription = "加入或新建系列", tint = if (inSeries) PrimaryOrange else Color.White)
-                }
-            }
-            Surface(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clickable(onClick = onRenameSeries),
-                shape = RoundedCornerShape(7.dp),
-                color = Color.White.copy(alpha = 0.1f),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.Edit, contentDescription = "编辑系列名称", tint = Color.White)
-                }
-            }
         }
     }
 }
