@@ -45,11 +45,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AspectRatio
+import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.Folder
@@ -77,6 +80,8 @@ import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -130,14 +135,19 @@ import com.outfuseplayer.data.PlaybackSettingsStore
 import com.outfuseplayer.data.MediaOutputRepository
 import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.data.ThumbnailRepository
+import com.outfuseplayer.data.UserSeries
+import com.outfuseplayer.data.smb.SmbCredentialRegistry
+import com.outfuseplayer.data.smb.toRemotePath
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.playback.createIjkDataSource
 import com.outfuseplayer.playback.OutfuseDataSourceFactory
 import com.outfuseplayer.playback.requiresIjkPlayer
+import com.outfuseplayer.playback.requiresSmbLegacyDownload
 import com.outfuseplayer.playback.requiresVlcPlayer
 import com.outfuseplayer.playback.resolveIjkDirectStream
 import com.outfuseplayer.playback.resolveVlcStreamUri
+import com.outfuseplayer.playback.SmbStreamServer
 import com.outfuseplayer.ui.components.FilePreviewThumb
 import com.outfuseplayer.ui.components.PosterImage
 import com.outfuseplayer.ui.theme.Danger
@@ -342,6 +352,10 @@ fun PlayerScreen(
     onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
     onOpenMultiPlayer: (List<LibraryItem>) -> Unit = { _ -> },
     onReturnToMultiPlayer: (() -> Unit)? = null,
+    series: List<UserSeries> = emptyList(),
+    onAddToSeries: (LibraryItem, String) -> Unit = { _, _ -> },
+    onRemoveFromSeries: (String, String) -> Unit = { _, _ -> },
+    onRenameSeries: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     var forceIjkFallback by remember(item.id, item.streamUrl) { mutableStateOf(false) }
@@ -362,6 +376,32 @@ fun PlayerScreen(
             onAutoRemoveIfMissing = onAutoRemoveIfMissing,
             onOpenMultiPlayer = { onOpenMultiPlayer(multiPlaylist) },
             onReturnToMultiPlayer = onReturnToMultiPlayer,
+            series = series,
+            onAddToSeries = onAddToSeries,
+            onRemoveFromSeries = onRemoveFromSeries,
+            onRenameSeries = onRenameSeries,
+            onBack = onBack
+        )
+        return
+    }
+
+    if (!forceExoFallback && item.requiresSmbLegacyDownload()) {
+        SmbLegacyPlaybackScreen(
+            item = item,
+            playlist = playlist,
+            expanded = expanded,
+            startShuffle = startShuffle,
+            onShowFileLocation = onShowFileLocation,
+            onFallbackToIjk = { forceIjkFallback = true },
+            onFallbackToExo = { forceExoFallback = true },
+            onRemoveFromLibrary = onRemoveFromLibrary,
+            onAutoRemoveIfMissing = onAutoRemoveIfMissing,
+            onOpenMultiPlayer = { onOpenMultiPlayer(multiPlaylist) },
+            onReturnToMultiPlayer = onReturnToMultiPlayer,
+            series = series,
+            onAddToSeries = onAddToSeries,
+            onRemoveFromSeries = onRemoveFromSeries,
+            onRenameSeries = onRenameSeries,
             onBack = onBack
         )
         return
@@ -380,6 +420,10 @@ fun PlayerScreen(
             onAutoRemoveIfMissing = onAutoRemoveIfMissing,
             onOpenMultiPlayer = { onOpenMultiPlayer(multiPlaylist) },
             onReturnToMultiPlayer = onReturnToMultiPlayer,
+            series = series,
+            onAddToSeries = onAddToSeries,
+            onRemoveFromSeries = onRemoveFromSeries,
+            onRenameSeries = onRenameSeries,
             onBack = onBack
         )
         return
@@ -420,9 +464,9 @@ fun PlayerScreen(
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             .forceDisableMediaCodecAsynchronousQueueing()
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 60_000, 1_000, 2_500)
-            .setTargetBufferBytes(64 * 1024 * 1024)
-            .setPrioritizeTimeOverSizeThresholds(false)
+            .setBufferDurationsMs(30_000, 120_000, 4_000, 8_000)
+            .setTargetBufferBytes(128 * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
         ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
@@ -470,6 +514,7 @@ fun PlayerScreen(
     var settingsVisible by remember { mutableStateOf(false) }
     var playlistVisible by remember { mutableStateOf(false) }
     var moreVisible by remember { mutableStateOf(false) }
+    var showFavoritesSheet by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(true) }
     var shuffleEnabled by remember(startShuffle) { mutableStateOf(startShuffle) }
     var fitMode by remember { mutableStateOf(PlayerFitMode.FIT) }
@@ -496,8 +541,10 @@ fun PlayerScreen(
     var currentIndex by remember { mutableStateOf(startIndex) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(1L) }
+    var bufferedMs by remember { mutableLongStateOf(0L) }
     var leavingPlayer by remember { mutableStateOf(false) }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
+    val inAnySeries = series.any { currentItem.id in it.itemIds }
     var videoRotation by remember(currentItem.id) { mutableStateOf(VideoRotation.DEG_0) }
     val saveScreenshot = rememberScreenshotSaver(currentItem, positionMs)
     val subtitleLabel = if (externalSubtitleItemId == currentItem.id && externalSubtitleUri != null) {
@@ -582,6 +629,7 @@ fun PlayerScreen(
         while (true) {
             runCatching {
                 positionMs = player.currentPosition.coerceAtLeast(0L)
+                bufferedMs = player.bufferedPosition.coerceAtLeast(0L)
                 val duration = player.duration
                 durationMs = if (duration > 0) duration else 180 * 60 * 1000L
                 if (duration > 0) {
@@ -745,7 +793,15 @@ fun PlayerScreen(
                         settingsVisible = false
                         playlistVisible = false
                     },
-                    onReturnToMultiPlayer = onReturnToMultiPlayer
+                    onReturnToMultiPlayer = onReturnToMultiPlayer,
+                    inAnySeries = inAnySeries,
+                    onOpenFavorites = {
+                        controlsVisible = true
+                        settingsVisible = false
+                        playlistVisible = false
+                        moreVisible = false
+                        showFavoritesSheet = true
+                    }
                 )
                 PlayerBottomControls(
                     item = currentItem,
@@ -754,6 +810,7 @@ fun PlayerScreen(
                     shuffleEnabled = shuffleEnabled,
                     positionMs = positionMs,
                     durationMs = durationMs,
+                    bufferedMs = bufferedMs,
                     onTogglePlay = {
                         if (player.isPlaying) player.pause() else player.play()
                     },
@@ -976,6 +1033,16 @@ fun PlayerScreen(
             }
         )
     }
+    if (showFavoritesSheet) {
+        SeriesFavoritesSheet(
+            item = currentItem,
+            series = series,
+            onAddToSeries = { name -> onAddToSeries(currentItem, name) },
+            onRemoveFromSeries = { seriesId -> onRemoveFromSeries(seriesId, currentItem.id) },
+            onRenameSeries = onRenameSeries,
+            onDismiss = { showFavoritesSheet = false }
+        )
+    }
 }
 
 @Composable
@@ -1135,6 +1202,11 @@ private fun ijkErrorText(what: Int, extra: Int): String = when (what) {
     -1007 -> "媒体文件已损坏或格式不受支持。"
     -1010 -> "设备不支持该媒体的编码格式。"
     -110 -> "读取媒体数据超时，请重试。"
+    // ffmpeg AVERROR codes surfaced as `what` by ijk/fijkplayer.
+    -1094995529 -> "媒体数据无效或已损坏（读取到错误数据），请确认文件完整后重试。"
+    -1381258232 -> "未找到可播放的视频/音频流（容器解析失败），文件可能不完整或编码不受支持。"
+    -541478725 -> "媒体文件提前结束，可能未下载完整。"
+    -5 -> "读取媒体数据失败（I/O 错误），请检查网络或文件是否可访问。"
     else -> "播放失败（错误码 $what/$extra），可尝试重试或改用兼容内核。"
 }
 
@@ -1191,6 +1263,208 @@ private fun PlayerErrorPanel(
 }
 
 @Composable
+private fun SmbLegacyPlaybackScreen(
+    item: LibraryItem,
+    playlist: List<LibraryItem>,
+    expanded: Boolean,
+    startShuffle: Boolean,
+    onShowFileLocation: (LibraryItem) -> Unit,
+    onFallbackToIjk: () -> Unit,
+    onFallbackToExo: () -> Unit = {},
+    onRemoveFromLibrary: (LibraryItem) -> Unit = {},
+    onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
+    onOpenMultiPlayer: (() -> Unit)? = null,
+    onReturnToMultiPlayer: (() -> Unit)? = null,
+    series: List<UserSeries> = emptyList(),
+    onAddToSeries: (LibraryItem, String) -> Unit = { _, _ -> },
+    onRemoveFromSeries: (String, String) -> Unit = { _, _ -> },
+    onRenameSeries: (String, String) -> Unit = { _, _ -> },
+    onBack: () -> Unit
+) {
+    var streamItem by remember(item.id, item.streamUrl) { mutableStateOf<LibraryItem?>(null) }
+    var error by remember(item.id, item.streamUrl) { mutableStateOf<String?>(null) }
+    var retryKey by remember(item.id) { mutableIntStateOf(0) }
+
+    DisposableEffect(item.id, item.streamUrl, retryKey) {
+        streamItem = null
+        error = null
+        var server: SmbStreamServer? = null
+
+        val uri = item.streamUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val config = uri?.let { SmbCredentialRegistry.find(it) }
+        val remotePath = uri?.pathSegments?.drop(1)?.joinToString("\\")?.toRemotePath().orEmpty()
+        if (config == null || remotePath.isBlank()) {
+            error = "无法解析 SMB 来源，请从来源页重新连接后重试。"
+        } else {
+            val srv = SmbStreamServer(config, remotePath)
+            server = srv
+            runCatching {
+                srv.start()
+                streamItem = item.copy(streamUrl = srv.url())
+            }.onFailure { t ->
+                android.util.Log.e("OutfuseSMB", "stream server start failed: ${t.message}")
+                error = "无法启动本地流服务：${t.message ?: t.javaClass.simpleName}"
+            }
+        }
+
+        onDispose {
+            server?.stop()
+        }
+    }
+
+    val local = streamItem
+    when {
+        local != null -> VlcFallbackPlayerScreen(
+            item = local,
+            // VlcFallbackPlayerScreen resolves its "current item" from the
+            // playlist, so passing the original SMB queue here would make VLC
+            // open the smb:// URI again. Play only the loopback stream item.
+            playlist = emptyList(),
+            expanded = expanded,
+            startShuffle = startShuffle,
+            onShowFileLocation = onShowFileLocation,
+            onFallbackToIjk = onFallbackToIjk,
+            onFallbackToExo = onFallbackToExo,
+            onRemoveFromLibrary = onRemoveFromLibrary,
+            onAutoRemoveIfMissing = onAutoRemoveIfMissing,
+            onOpenMultiPlayer = onOpenMultiPlayer,
+            onReturnToMultiPlayer = onReturnToMultiPlayer,
+            series = series,
+            onAddToSeries = onAddToSeries,
+            onRemoveFromSeries = onRemoveFromSeries,
+            onRenameSeries = onRenameSeries,
+            onBack = onBack
+        )
+        error != null -> SmbStreamErrorScreen(
+            item = item,
+            message = error!!,
+            onRetry = { retryKey++ },
+            onBack = onBack
+        )
+        else -> SmbStreamPreparingScreen(item = item, onBack = onBack)
+    }
+}
+
+@Composable
+private fun SmbStreamPreparingScreen(
+    item: LibraryItem,
+    onBack: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .safeDrawingPadding()
+            .padding(18.dp)
+    ) {
+        IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart)) {
+            Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = Color.White)
+        }
+        Surface(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            shape = RoundedCornerShape(10.dp),
+            color = OutfuseSurface.copy(alpha = 0.96f),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text("正在准备播放", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                Text(
+                    item.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "正在建立本地流连接（边播边加载）...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextMuted,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmbStreamErrorScreen(
+    item: LibraryItem,
+    message: String,
+    onRetry: () -> Unit,
+    onBack: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .safeDrawingPadding()
+            .padding(18.dp)
+    ) {
+        IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart)) {
+            Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = Color.White)
+        }
+        Surface(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            shape = RoundedCornerShape(10.dp),
+            color = OutfuseSurface.copy(alpha = 0.96f),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("无法播放", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                Text(
+                    item.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.82f),
+                    textAlign = TextAlign.Center
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onRetry,
+                        shape = RoundedCornerShape(7.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                    ) {
+                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("重试")
+                    }
+                    OutlinedButton(
+                        onClick = onBack,
+                        shape = RoundedCornerShape(7.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                    ) {
+                        Text("返回")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun VlcFallbackPlayerScreen(
     item: LibraryItem,
     playlist: List<LibraryItem>,
@@ -1203,6 +1477,10 @@ private fun VlcFallbackPlayerScreen(
     onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
     onOpenMultiPlayer: (() -> Unit)? = null,
     onReturnToMultiPlayer: (() -> Unit)? = null,
+    series: List<UserSeries> = emptyList(),
+    onAddToSeries: (LibraryItem, String) -> Unit = { _, _ -> },
+    onRemoveFromSeries: (String, String) -> Unit = { _, _ -> },
+    onRenameSeries: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1226,6 +1504,7 @@ private fun VlcFallbackPlayerScreen(
         mutableStateOf(playbackItems.indexOfFirst { it.id == item.id }.takeIf { it >= 0 } ?: 0)
     }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
+    val inAnySeries = series.any { currentItem.id in it.itemIds }
     val libVlcResult = remember {
         runCatching {
             LibVLC(
@@ -1233,7 +1512,12 @@ private fun VlcFallbackPlayerScreen(
                 arrayListOf(
                     "--drop-late-frames",
                     "--skip-frames",
-                    "--avcodec-hw=any",
+                    // Software decoding only: legacy containers (asf/wmv/rm/vob...)
+                    // rely on codecs whose MediaCodec hardware decoders are buggy
+                    // on some devices (e.g. OPPO/ColorOS), which crashes VLC with
+                    // EncounteredError instead of falling back. SW decode is fine
+                    // for these older codecs.
+                    "--avcodec-hw=none",
                     "--network-caching=1800",
                     "--file-caching=1000",
                     "--smb-caching=1800"
@@ -1243,6 +1527,7 @@ private fun VlcFallbackPlayerScreen(
     }
     val libVlc = libVlcResult.getOrNull()
     if (libVlc == null) {
+        android.util.Log.e("OutfuseVLC", "LibVLC init failed: ${libVlcResult.exceptionOrNull()?.message}")
         LaunchedEffect(currentItem.id) { onFallbackToIjk() }
         PlaybackStartupErrorScreen(item = currentItem, message = "正在切换播放内核", onBack = onBack)
         return
@@ -1258,6 +1543,7 @@ private fun VlcFallbackPlayerScreen(
     var settingsVisible by remember { mutableStateOf(false) }
     var moreVisible by remember { mutableStateOf(false) }
     var playlistVisible by remember { mutableStateOf(false) }
+    var showFavoritesSheet by remember { mutableStateOf(false) }
     var fitMode by remember { mutableStateOf(PlayerFitMode.FIT) }
     var aspectMode by remember { mutableStateOf(PlayerAspectMode.ORIGINAL) }
     var sourceAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
@@ -1367,7 +1653,7 @@ private fun VlcFallbackPlayerScreen(
             player.stop()
             val uri = resolveVlcStreamUri(currentItem) ?: Uri.parse(requireNotNull(currentItem.streamUrl))
             val media = Media(libVlc, uri).apply {
-                setHWDecoderEnabled(true, false)
+                setHWDecoderEnabled(false, false)
                 addOption(":network-caching=1200")
                 addOption(":file-caching=600")
                 addOption(":live-caching=1200")
@@ -1431,6 +1717,7 @@ private fun VlcFallbackPlayerScreen(
                     }
                 }
                 VlcMediaPlayer.Event.EncounteredError -> {
+                    android.util.Log.e("OutfuseVLC", "EncounteredError for ${currentItem.streamUrl} (${currentItem.originalTitle ?: currentItem.title})")
                     isPlaying = false
                     isPrepared = false
                     controlsVisible = true
@@ -1460,7 +1747,7 @@ private fun VlcFallbackPlayerScreen(
             player.stop()
             val uri = resolveVlcStreamUri(currentItem) ?: Uri.parse(requireNotNull(currentItem.streamUrl))
             val media = Media(libVlc, uri).apply {
-                setHWDecoderEnabled(true, false)
+                setHWDecoderEnabled(false, false)
                 addOption(":network-caching=1200")
                 addOption(":file-caching=600")
                 addOption(":live-caching=1200")
@@ -1668,7 +1955,15 @@ private fun VlcFallbackPlayerScreen(
                         settingsVisible = false
                         playlistVisible = false
                     },
-                    onReturnToMultiPlayer = onReturnToMultiPlayer
+                    onReturnToMultiPlayer = onReturnToMultiPlayer,
+                    inAnySeries = inAnySeries,
+                    onOpenFavorites = {
+                        controlsVisible = true
+                        settingsVisible = false
+                        playlistVisible = false
+                        moreVisible = false
+                        showFavoritesSheet = true
+                    }
                 )
                 IjkBottomControls(
                     item = currentItem,
@@ -1851,6 +2146,16 @@ private fun VlcFallbackPlayerScreen(
             }
         )
     }
+    if (showFavoritesSheet) {
+        SeriesFavoritesSheet(
+            item = currentItem,
+            series = series,
+            onAddToSeries = { name -> onAddToSeries(currentItem, name) },
+            onRemoveFromSeries = { seriesId -> onRemoveFromSeries(seriesId, currentItem.id) },
+            onRenameSeries = onRenameSeries,
+            onDismiss = { showFavoritesSheet = false }
+        )
+    }
 }
 
 @Composable
@@ -1883,6 +2188,10 @@ private fun IjkFallbackPlayerScreen(
     onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
     onOpenMultiPlayer: (() -> Unit)? = null,
     onReturnToMultiPlayer: (() -> Unit)? = null,
+    series: List<UserSeries> = emptyList(),
+    onAddToSeries: (LibraryItem, String) -> Unit = { _, _ -> },
+    onRemoveFromSeries: (String, String) -> Unit = { _, _ -> },
+    onRenameSeries: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1906,6 +2215,7 @@ private fun IjkFallbackPlayerScreen(
         mutableStateOf(playbackItems.indexOfFirst { it.id == item.id }.takeIf { it >= 0 } ?: 0)
     }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
+    val inAnySeries = series.any { currentItem.id in it.itemIds }
     // Recreate the IJK player whenever the item changes or a retry is
     // requested. Reusing one instance across many reset()/prepare cycles can
     // leave it wedged, which is a common cause of "cannot play" errors that
@@ -1932,6 +2242,7 @@ private fun IjkFallbackPlayerScreen(
     var settingsVisible by remember { mutableStateOf(false) }
     var moreVisible by remember { mutableStateOf(false) }
     var playlistVisible by remember { mutableStateOf(false) }
+    var showFavoritesSheet by remember { mutableStateOf(false) }
     var fitMode by remember { mutableStateOf(PlayerFitMode.FIT) }
     var aspectMode by remember { mutableStateOf(PlayerAspectMode.ORIGINAL) }
     var sourceAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
@@ -2275,7 +2586,15 @@ private fun IjkFallbackPlayerScreen(
                         settingsVisible = false
                         playlistVisible = false
                     },
-                    onReturnToMultiPlayer = onReturnToMultiPlayer
+                    onReturnToMultiPlayer = onReturnToMultiPlayer,
+                    inAnySeries = inAnySeries,
+                    onOpenFavorites = {
+                        controlsVisible = true
+                        settingsVisible = false
+                        playlistVisible = false
+                        moreVisible = false
+                        showFavoritesSheet = true
+                    }
                 )
                 IjkBottomControls(
                     item = currentItem,
@@ -2462,6 +2781,16 @@ private fun IjkFallbackPlayerScreen(
             }
         )
     }
+    if (showFavoritesSheet) {
+        SeriesFavoritesSheet(
+            item = currentItem,
+            series = series,
+            onAddToSeries = { name -> onAddToSeries(currentItem, name) },
+            onRemoveFromSeries = { seriesId -> onRemoveFromSeries(seriesId, currentItem.id) },
+            onRenameSeries = onRenameSeries,
+            onDismiss = { showFavoritesSheet = false }
+        )
+    }
 }
 
 @Composable
@@ -2515,6 +2844,7 @@ private fun IjkBottomControls(
     isPlaying: Boolean,
     positionMs: Long,
     durationMs: Long,
+    bufferedMs: Long = 0L,
     hasPrevious: Boolean,
     hasNext: Boolean,
     onTogglePlay: () -> Unit,
@@ -2558,22 +2888,18 @@ private fun IjkBottomControls(
                 durationMs = durationMs
             )
         }
-        Slider(
-            value = visiblePositionMs.coerceAtLeast(0L).toFloat(),
-            onValueChange = {
-                scrubPositionMs = it.toLong().coerceIn(0L, durationMs.coerceAtLeast(1L))
-                onSeekPreview(scrubPositionMs)
+        BufferedSeekBar(
+            positionMs = visiblePositionMs,
+            bufferedMs = bufferedMs,
+            durationMs = durationMs,
+            onScrub = { ms ->
+                scrubPositionMs = ms
+                onSeekPreview(ms)
             },
-            onValueChangeFinished = {
-                onSeekCommit(scrubPositionMs.takeIf { it >= 0L } ?: positionMs)
+            onScrubFinished = { ms ->
+                onSeekCommit(ms)
                 scrubPositionMs = -1L
-            },
-            valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
-            colors = SliderDefaults.colors(
-                thumbColor = PrimaryOrange,
-                activeTrackColor = PrimaryOrange,
-                inactiveTrackColor = Color.White.copy(alpha = 0.24f)
-            )
+            }
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -2933,7 +3259,9 @@ private fun PlayerTopBar(
     onPlaylist: () -> Unit,
     onLock: () -> Unit,
     onMore: () -> Unit,
-    onReturnToMultiPlayer: (() -> Unit)? = null
+    onReturnToMultiPlayer: (() -> Unit)? = null,
+    inAnySeries: Boolean = false,
+    onOpenFavorites: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
@@ -2965,6 +3293,15 @@ private fun PlayerTopBar(
             }
         }
         Row {
+            if (onOpenFavorites != null) {
+                IconButton(onClick = onOpenFavorites) {
+                    Icon(
+                        imageVector = if (inAnySeries) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                        contentDescription = "收藏到系列",
+                        tint = if (inAnySeries) PrimaryOrange else Color.White
+                    )
+                }
+            }
             if (onReturnToMultiPlayer != null) {
                 IconButton(onClick = onReturnToMultiPlayer) {
                     Icon(
@@ -3001,6 +3338,7 @@ private fun PlayerBottomControls(
     shuffleEnabled: Boolean,
     positionMs: Long,
     durationMs: Long,
+    bufferedMs: Long = 0L,
     onTogglePlay: () -> Unit,
     onToggleShuffle: () -> Unit,
     speed: Float,
@@ -3012,8 +3350,8 @@ private fun PlayerBottomControls(
 ) {
     val compact = !expanded
     var scrubPositionMs by remember(item.id) { mutableLongStateOf(-1L) }
+    var popupVisible by remember { mutableStateOf(false) }
     val visiblePositionMs = scrubPositionMs.takeIf { it >= 0L } ?: positionMs
-    val progress = if (durationMs > 0L) visiblePositionMs.toFloat() / durationMs.toFloat() else 0f
     val timeStyle = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium
     val controlSpacing = if (compact) 6.dp else 8.dp
     Column(
@@ -3042,21 +3380,16 @@ private fun PlayerBottomControls(
                 overflow = TextOverflow.Clip,
                 modifier = Modifier.widthIn(min = 38.dp, max = 58.dp)
             )
-            Slider(
-                value = progress.coerceIn(0f, 1f),
-                onValueChange = { value ->
-                    scrubPositionMs = (durationMs * value).toLong().coerceIn(0L, durationMs.coerceAtLeast(1L))
-                },
-                onValueChangeFinished = {
-                    scrubPositionMs.takeIf { it >= 0L }?.let(player::seekTo)
+            BufferedSeekBar(
+                positionMs = visiblePositionMs,
+                bufferedMs = bufferedMs,
+                durationMs = durationMs,
+                onScrub = { scrubPositionMs = it },
+                onScrubFinished = { ms ->
+                    player.seekTo(ms)
                     scrubPositionMs = -1L
                 },
-                modifier = Modifier.weight(1f),
-                colors = SliderDefaults.colors(
-                    thumbColor = PrimaryOrange,
-                    activeTrackColor = PrimaryOrange,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.18f)
-                )
+                modifier = Modifier.weight(1f)
             )
             Text(
                 text = formatTime(durationMs),
@@ -3067,96 +3400,146 @@ private fun PlayerBottomControls(
                 modifier = Modifier.widthIn(min = 38.dp, max = 58.dp)
             )
         }
-        if (compact) {
+        Box(modifier = Modifier.fillMaxWidth()) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                modifier = Modifier.align(Alignment.Center),
+                horizontalArrangement = Arrangement.spacedBy(controlSpacing),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
-                    PlayerIconButton(Icons.Outlined.SkipPrevious, "上一项", compact = true) {
-                        player.seekToPreviousMediaItem()
-                    }
-                    PlayerIconButton(Icons.Outlined.Replay10, "后退 10 秒", compact = true) {
-                        player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0L))
-                    }
-                    PlayerIconButton(
-                        imageVector = if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
-                        prominent = true,
-                        compact = true,
-                        onClick = onTogglePlay
-                    )
-                    PlayerIconButton(Icons.Outlined.Forward10, "前进 10 秒", compact = true) {
-                        player.seekTo(player.currentPosition + 10_000)
-                    }
-                    PlayerIconButton(Icons.Outlined.SkipNext, "下一项", compact = true) {
-                        player.seekToNextMediaItem()
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
-                    PlayerIconButton(
-                        imageVector = Icons.Outlined.Shuffle,
-                        contentDescription = "随机播放",
-                        prominent = shuffleEnabled,
-                        compact = true,
-                        onClick = onToggleShuffle
-                    )
-                    SpeedPill("${speed}x", compact = true, onClick = onCycleSpeed)
-                    PlayerIconButton(Icons.Outlined.Fullscreen, "全屏", compact = true) { onToggleFit() }
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
-                PlayerIconButton(Icons.Outlined.SkipPrevious, "上一项") {
+                PlayerIconButton(Icons.Outlined.SkipPrevious, "上一项", compact = compact) {
                     player.seekToPreviousMediaItem()
                 }
-                PlayerIconButton(Icons.Outlined.Replay10, "后退 10 秒") {
+                PlayerIconButton(Icons.Outlined.Replay10, "后退 10 秒", compact = compact) {
                     player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0L))
                 }
                 PlayerIconButton(
                     imageVector = if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
                     contentDescription = if (isPlaying) "暂停" else "播放",
                     prominent = true,
+                    compact = compact,
                     onClick = onTogglePlay
                 )
-                PlayerIconButton(Icons.Outlined.Forward10, "前进 10 秒") {
+                PlayerIconButton(Icons.Outlined.Forward10, "前进 10 秒", compact = compact) {
                     player.seekTo(player.currentPosition + 10_000)
                 }
-                PlayerIconButton(Icons.Outlined.SkipNext, "下一项") {
+                PlayerIconButton(Icons.Outlined.SkipNext, "下一项", compact = compact) {
                     player.seekToNextMediaItem()
                 }
+            }
+            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                PlayerIconButton(Icons.Outlined.MoreVert, "更多播放选项", compact = compact) {
+                    popupVisible = !popupVisible
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(controlSpacing), verticalAlignment = Alignment.CenterVertically) {
-                    PlayerIconButton(
-                        imageVector = Icons.Outlined.Shuffle,
-                        contentDescription = "随机播放",
-                        prominent = shuffleEnabled,
-                        onClick = onToggleShuffle
+                DropdownMenu(
+                    expanded = popupVisible,
+                    onDismissRequest = { popupVisible = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (shuffleEnabled) "随机播放 · 开" else "随机播放 · 关") },
+                        onClick = {
+                            popupVisible = false
+                            onToggleShuffle()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("倍速 ${speed}x") },
+                        onClick = {
+                            popupVisible = false
+                            onCycleSpeed()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("全屏 / 屏幕模式") },
+                        onClick = {
+                            popupVisible = false
+                            onToggleFit()
+                        }
                     )
                     if (onOpenMultiPlayer != null) {
-                        PlayerIconButton(
-                            imageVector = Icons.Outlined.GridView,
-                            contentDescription = "多窗口播放",
-                            onClick = onOpenMultiPlayer
+                        DropdownMenuItem(
+                            text = { Text("多窗口播放") },
+                            onClick = {
+                                popupVisible = false
+                                onOpenMultiPlayer()
+                            }
                         )
                     }
-                    SpeedPill("${speed}x", onClick = onCycleSpeed)
-                    PlayerIconButton(Icons.Outlined.Fullscreen, "全屏") { onToggleFit() }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BufferedSeekBar(
+    positionMs: Long,
+    bufferedMs: Long,
+    durationMs: Long,
+    onScrub: (Long) -> Unit,
+    onScrubFinished: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val safeDuration = durationMs.coerceAtLeast(1L)
+    val playedFraction = (positionMs.toFloat() / safeDuration).coerceIn(0f, 1f)
+    val bufferedFraction = (bufferedMs.toFloat() / safeDuration).coerceIn(0f, 1f)
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .pointerInput(safeDuration) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var currentMs = ((down.position.x / size.width).coerceIn(0f, 1f) * safeDuration).toLong()
+                    onScrub(currentMs)
+                    down.consume()
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull() ?: break
+                        if (!change.pressed) break
+                        val next = ((change.position.x / size.width).coerceIn(0f, 1f) * safeDuration).toLong()
+                        if (next != currentMs) {
+                            currentMs = next
+                            onScrub(currentMs)
+                        }
+                        change.consume()
+                    }
+                    onScrubFinished(currentMs)
+                }
+            },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        val thumbSize = 14.dp
+        val thumbOffsetX = (maxWidth - thumbSize) * playedFraction
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color.White.copy(alpha = 0.24f))
+        )
+        if (bufferedFraction > 0f) {
+            Box(
+                Modifier
+                    .fillMaxWidth(bufferedFraction)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(alpha = 0.42f))
+            )
+        }
+        Box(
+            Modifier
+                .fillMaxWidth(playedFraction)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(PrimaryOrange)
+        )
+        Box(
+            Modifier
+                .offset(x = thumbOffsetX)
+                .size(thumbSize)
+                .background(PrimaryOrange, CircleShape)
+        )
     }
 }
 

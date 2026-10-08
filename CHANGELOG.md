@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.35 - 2026-10-09
+
+### 中文说明
+
+- 修复 SMB 旧格式（asf/wmv/avi/rm/rmvb/mpg/mpeg/vob 等）无法播放：这些容器 ExoPlayer 与 IJK(ffmpeg) 都无法解复用，VLC 直连 SMB（libdsm）又连不上现代 NAS。现改为**本地回环 HTTP 流式播放**——用 smbj（SMB2/3）读文件、按需喂给 VLC（HTTP Range 支持拖动/缓冲），边播边加载，无需整文件下载。
+- SMB 现代格式（mp4/mkv/mov/ts 等）统一由 ExoPlayer + smbj 数据源播放，支持随机访问。
+- 新增 SMB 连接池 + 512KB 预读缓冲：seek 复用连接、小读合并，大文件加载与切集更流畅。
+- 加固 SMB 连接：闲置 15 秒 TTL 淘汰、socket/读/写/事务超时、打开失败即关闭，消除偶发报错/卡死。
+- 调优 ExoPlayer 缓冲（按时间优先）、VLC 强制软解（修复 OPPO/ColorOS 硬解旧编码崩溃）。
+- 进度条显示已缓冲区段；底部控制改单行 + 右侧弹窗；IJK 报错文案友好化。
+- 播放页右上角新增「收藏到系列」按钮。
+
+### English Notes
+
+- Fixed SMB legacy containers (asf/wmv/avi/rm/rmvb/mpg/mpeg/vob): now streamed to VLC over a loopback HTTP server backed by smbj (SMB2/3), with HTTP Range seeking — play-while-loading, no full download. Modern SMB formats (mp4/mkv/mov/ts) play via ExoPlayer + smbj.
+- Added an SMB connection pool + 512KB read-ahead buffer, hardened connections (TTL + timeouts), time-prioritized ExoPlayer buffering, and VLC software decoding (fixes OPPO/ColorOS hardware-decoder crashes on legacy codecs).
+- Buffered-range progress bar, single-row bottom controls with a right-side popup, friendlier IJK errors, and a top-right "favorite to series" button.
+
 ## 0.3.7 - 2026-08-19
 
 ### 中文说明

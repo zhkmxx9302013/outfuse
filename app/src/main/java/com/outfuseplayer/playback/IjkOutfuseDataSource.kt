@@ -45,6 +45,15 @@ private val VlcRiskyCodecHints = setOf(
 
 private val IjkLegacyExtensions = setOf("flv", "f4v")
 
+// Legacy containers/codecs that ExoPlayer cannot demux or decode (ASF/WMV,
+// AVI/DivX, RealMedia, MPEG-PS elementary streams, VOB...). On SMB these are
+// routed to VLC: VLC's libdsm speaks SMB2/3 and its ASF/WMV/RealMedia demuxers
+// are far stronger than ExoPlayer's (which has no ASF/RealMedia support at all).
+private val SmbVlcExtensions = setOf(
+    "asf", "wmv", "avi", "divx", "rm", "rmvb",
+    "mpg", "mpeg", "mpe", "m1v", "m2v", "m2p", "mpv", "mpv2", "vob", "dat"
+)
+
 data class IjkDirectStream(
     val uri: Uri,
     val headers: Map<String, String> = emptyMap()
@@ -58,6 +67,12 @@ private fun LibraryItem.playbackExtension(): String =
 
 fun LibraryItem.requiresVlcPlayer(): Boolean {
     val extension = playbackExtension()
+    // SMB legacy containers (asf/wmv/avi/rm/rmvb/vob...) can't be demuxed by
+    // ExoPlayer, so route them to VLC (libdsm handles SMB2/3; VLC's ASF/WMV/
+    // RealMedia demuxers are the strongest). Everything else on SMB stays on
+    // ExoPlayer + our smbj data source for reliable SMB2/3 random access.
+    if (isSmbPlayback() && extension in SmbVlcExtensions) return true
+    if (isSmbPlayback()) return false
     if (extension in VlcLegacyExtensions) return true
     if (extension in VlcNetworkContainerExtensions && isNetworkPlayback()) return true
     if (extension !in VlcRiskyContainerExtensions) return false
@@ -65,6 +80,11 @@ fun LibraryItem.requiresVlcPlayer(): Boolean {
         .joinToString(" ")
         .lowercase()
     return VlcRiskyCodecHints.any { it in hints }
+}
+
+private fun LibraryItem.isSmbPlayback(): Boolean {
+    val scheme = streamUrl?.let { runCatching { Uri.parse(it).scheme.orEmpty() }.getOrDefault("") }.orEmpty()
+    return scheme.equals("smb", ignoreCase = true)
 }
 
 private fun LibraryItem.isNetworkPlayback(): Boolean {
@@ -77,6 +97,16 @@ private fun LibraryItem.isNetworkPlayback(): Boolean {
 
 fun LibraryItem.requiresIjkPlayer(): Boolean {
     return playbackExtension() in IjkLegacyExtensions
+}
+
+/**
+ * True for SMB files in legacy containers (asf/wmv/avi/rm/rmvb/vob...) that
+ * neither ExoPlayer (no demuxer) nor IJK (ffmpeg build lacks these demuxers/
+ * codecs) can play. These are downloaded to a local cache via smbj and played
+ * with VLC instead.
+ */
+fun LibraryItem.requiresSmbLegacyDownload(): Boolean {
+    return isSmbPlayback() && playbackExtension() in SmbVlcExtensions
 }
 
 fun resolveVlcStreamUri(item: LibraryItem): Uri? {
@@ -172,9 +202,19 @@ private class SmbIjkDataSource(private val uri: Uri) : IMediaDataSource {
     override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
         ensureOpen()
         if (position >= fileSize) return -1
-        val bytesToRead = min(size.toLong(), fileSize - position).toInt()
-        if (bytesToRead <= 0) return -1
-        return file?.read(buffer, position, offset, bytesToRead)?.takeIf { it > 0 } ?: -1
+        val total = min(size.toLong(), fileSize - position).toInt()
+        if (total <= 0) return -1
+        // smbj's SMB2 read may return fewer bytes than requested (short read).
+        // IJK's ffmpeg AVIO bridge expects readAt to fill the whole request, and
+        // a short read makes demuxers (e.g. ASF/WMV header parsing) fail with
+        // AVERROR_STREAM_NOT_FOUND. Loop until the request is satisfied or EOF.
+        var read = 0
+        while (read < total) {
+            val n = file?.read(buffer, position + read, offset + read, total - read) ?: break
+            if (n <= 0) break
+            read += n
+        }
+        return if (read > 0) read else -1
     }
 
     override fun getSize(): Long {

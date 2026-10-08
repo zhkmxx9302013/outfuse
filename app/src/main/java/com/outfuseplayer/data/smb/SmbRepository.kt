@@ -392,6 +392,57 @@ class SmbRepository {
             )
         }
 
+    /**
+     * Downloads an SMB file to a specific local path (used to play legacy
+     * containers via VLC, whose libdsm SMB access is unreliable). Reports
+     * progress in [0, 1]; cancels cleanly when the calling coroutine ends.
+     */
+    suspend fun downloadToCache(
+        config: SmbConfig,
+        path: String,
+        target: File,
+        onProgress: (Float) -> Unit = {}
+    ): SmbActionResult<File> = withContext(Dispatchers.IO) {
+        runCatching {
+            target.parentFile?.mkdirs()
+            val remotePath = path.toRemotePath()
+            withShare(config) { share ->
+                val fileInfo = share.getFileInformation(remotePath)
+                val fileSize = fileInfo.standardInformation.endOfFile.coerceAtLeast(0L)
+                val remoteFile = share.openFile(
+                    remotePath,
+                    setOf(AccessMask.GENERIC_READ),
+                    EnumSet.noneOf(FileAttributes::class.java),
+                    SMB2ShareAccess.ALL,
+                    SMB2CreateDisposition.FILE_OPEN,
+                    setOf(SMB2CreateOptions.FILE_NON_DIRECTORY_FILE, SMB2CreateOptions.FILE_SEQUENTIAL_ONLY)
+                )
+                remoteFile.use { input ->
+                    FileOutputStream(target).use { output ->
+                        val buffer = ByteArray(512 * 1024)
+                        var position = 0L
+                        while (position < fileSize) {
+                            ensureActive()
+                            val read = input.read(buffer, position, 0, min(buffer.size.toLong(), fileSize - position).toInt())
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                            position += read
+                            if (fileSize > 0) onProgress((position.toFloat() / fileSize).coerceIn(0f, 1f))
+                        }
+                    }
+                }
+            }
+            target
+        }.fold(
+            onSuccess = { SmbActionResult(true, "ok", it) },
+            onFailure = { error ->
+                runCatching { target.delete() }
+                if (error is CancellationException) throw error
+                SmbActionResult(false, error.toFriendlyMessage())
+            }
+        )
+    }
+
     private fun <T> withShare(config: SmbConfig, block: (DiskShare) -> T): T {
         require(config.server.isNotBlank()) { "请填写 SMB 服务器地址" }
         require(config.share.isNotBlank()) { "请填写共享名" }

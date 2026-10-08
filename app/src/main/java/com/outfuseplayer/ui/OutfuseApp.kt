@@ -1567,6 +1567,10 @@ private fun OutfuseAppContent(
                         playerId = null
                     }
                 },
+                series = userSeries,
+                onAddToSeries = ::addToSeries,
+                onRemoveFromSeries = ::removeFromSeries,
+                onRenameSeries = ::renameSeries,
                 onBack = ::closePlayer
             )
         }

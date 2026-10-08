@@ -229,7 +229,7 @@ fun DetailScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SeriesFavoritesSheet(
+fun SeriesFavoritesSheet(
     item: LibraryItem,
     series: List<UserSeries>,
     onAddToSeries: (String) -> Unit,
