@@ -45,13 +45,14 @@ private val VlcRiskyCodecHints = setOf(
 
 private val IjkLegacyExtensions = setOf("flv", "f4v")
 
-// Legacy containers/codecs that ExoPlayer cannot demux or decode (ASF/WMV,
-// AVI/DivX, RealMedia, MPEG-PS elementary streams, VOB...). On SMB these are
-// routed to VLC: VLC's libdsm speaks SMB2/3 and its ASF/WMV/RealMedia demuxers
-// are far stronger than ExoPlayer's (which has no ASF/RealMedia support at all).
+// Containers ExoPlayer can't reliably demux/decode. ASF/WMV/RealMedia/VOB have
+// no ExoPlayer demuxer at all; MOV/QT often carry ProRes/DNxHD editing codecs
+// that ExoPlayer silently drops (black screen). These are streamed to VLC, whose
+// ffmpeg-based codec library covers them all.
 private val SmbVlcExtensions = setOf(
     "asf", "wmv", "avi", "divx", "rm", "rmvb",
-    "mpg", "mpeg", "mpe", "m1v", "m2v", "m2p", "mpv", "mpv2", "vob", "dat"
+    "mpg", "mpeg", "mpe", "m1v", "m2v", "m2p", "mpv", "mpv2", "vob", "dat",
+    "mov", "qt"
 )
 
 data class IjkDirectStream(
@@ -299,6 +300,20 @@ private class WebDavIjkDataSource(private val uri: Uri) : IMediaDataSource {
             if (code !in listOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_PARTIAL)) return -1
             updateSizeFromHeaders(connection)
             connection.inputStream.use { input ->
+                if (code == HttpURLConnection.HTTP_OK && position > 0) {
+                    var bytesToSkip = position
+                    val scratch = ByteArray(64 * 1024)
+                    while (bytesToSkip > 0) {
+                        val skipped = input.skip(bytesToSkip)
+                        if (skipped > 0) {
+                            bytesToSkip -= skipped
+                        } else {
+                            val read = input.read(scratch, 0, min(scratch.size.toLong(), bytesToSkip).toInt())
+                            if (read < 0) return -1
+                            bytesToSkip -= read
+                        }
+                    }
+                }
                 input.read(buffer, offset, size).takeIf { it > 0 } ?: -1
             }
         } finally {

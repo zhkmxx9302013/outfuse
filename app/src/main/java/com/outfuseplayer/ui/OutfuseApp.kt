@@ -1553,6 +1553,8 @@ private fun OutfuseAppContent(
                 playlist = playQueue.ifEmpty { libraryItems.filter { it.streamUrl != null && it.itemType != com.outfuseplayer.model.LibraryItemType.IMAGE } },
                 expanded = expanded,
                 startShuffle = startShuffle,
+                autoPlayNextEnabled = appSettings.autoPlayNext,
+                keepScreenOnDuringPlayback = appSettings.keepScreenOnDuringPlayback,
                 onShowFileLocation = ::showFileLocation,
                 onRemoveFromLibrary = { item ->
                     removeItemFromLibrary(item)

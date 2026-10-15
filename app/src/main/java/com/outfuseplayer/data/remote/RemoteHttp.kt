@@ -137,6 +137,8 @@ internal fun Throwable.toRemoteFriendlyMessage(): String {
     return when {
         raw.contains("401") || raw.contains("Unauthorized", ignoreCase = true) -> "认证失败，请检查账号、密码或 API Key"
         raw.contains("403") || raw.contains("Forbidden", ignoreCase = true) -> "无权访问该目录或服务"
+        raw.contains("405") || raw.contains("Method Not Allowed", ignoreCase = true) ->
+            "服务器拒绝 WebDAV 方法（HTTP 405）。连接或浏览失败时请核对 WebDAV 完整地址与应用密码（123网盘地址应包含 /webdav）；文件操作失败则可能是服务端不支持该操作。"
         raw.contains("timed out", ignoreCase = true) -> "连接超时，请检查网络和服务器地址"
         raw.contains("Unable to resolve host", ignoreCase = true) -> "无法解析服务器地址"
         raw.contains("Trust anchor", ignoreCase = true) ||

@@ -202,39 +202,80 @@ class WebDavRepository {
 
     private fun propfind(config: RemoteSourceConfig, path: String, depth: Int): List<RemoteEntry> {
         var lastError = ""
+        val explicitProperties = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <d:propfind xmlns:d="DAV:">
+              <d:prop>
+                <d:displayname/>
+                <d:getcontentlength/>
+                <d:getlastmodified/>
+                <d:getcontenttype/>
+                <d:resourcetype/>
+              </d:prop>
+            </d:propfind>
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+        // A few cloud WebDAV gateways (including deployments used by 123Pan)
+        // reject one of the two legal PROPFIND forms. Try the body-less allprop
+        // form as well as an explicit property request before surfacing 405.
+        val requestBodies = if (config.type == SourceType.PAN_123) {
+            listOf(null, explicitProperties)
+        } else {
+            listOf(explicitProperties, null)
+        }
         for (targetUrl in propfindUrls(config, path)) {
-            val connection = URL(targetUrl).openConnection() as HttpURLConnection
-            connection.setRequestMethodCompat("PROPFIND")
-            connection.applyHeaders(config.authHeaders())
-            connection.setRequestProperty("Depth", depth.toString())
-            connection.setRequestProperty("Content-Type", "application/xml; charset=utf-8")
-            connection.doOutput = true
-            connection.outputStream.use { output ->
-                output.write(
-                    """
-                    <?xml version="1.0" encoding="utf-8"?>
-                    <d:propfind xmlns:d="DAV:">
-                      <d:prop>
-                        <d:displayname/>
-                        <d:getcontentlength/>
-                        <d:getlastmodified/>
-                        <d:getcontenttype/>
-                        <d:resourcetype/>
-                      </d:prop>
-                    </d:propfind>
-                    """.trimIndent().toByteArray(Charsets.UTF_8)
+            for (requestBody in requestBodies) {
+                val connection = openPropfindConnection(
+                    initialUrl = targetUrl,
+                    config = config,
+                    depth = depth,
+                    requestBody = requestBody
                 )
-            }
-            val code = connection.responseCode
-            if (code in listOf(200, 207)) {
-                connection.inputStream.use { input ->
-                    return parsePropfind(config, input.readBytes())
+                val code = connection.responseCode
+                if (code in listOf(200, 207)) {
+                    val bytes = connection.inputStream.use { it.readBytes() }
+                    connection.disconnect()
+                    return parsePropfind(config, bytes)
                 }
+                val errorText = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                lastError = "HTTP $code $errorText"
+                connection.disconnect()
             }
-            val errorText = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            lastError = "HTTP $code $errorText"
         }
         error(lastError.ifBlank { "WebDAV PROPFIND failed" })
+    }
+
+    private fun openPropfindConnection(
+        initialUrl: String,
+        config: RemoteSourceConfig,
+        depth: Int,
+        requestBody: ByteArray?
+    ): HttpURLConnection {
+        var target = URL(initialUrl)
+        val originalHost = target.host
+        repeat(6) {
+            val connection = target.openConnection() as HttpURLConnection
+            connection.instanceFollowRedirects = false
+            connection.setRequestMethodCompat("PROPFIND")
+            connection.applyHeaders(
+                if (target.host.equals(originalHost, ignoreCase = true)) config.authHeaders() else emptyMap()
+            )
+            connection.setRequestProperty("Depth", depth.toString())
+            connection.setRequestProperty("Accept", "application/xml, text/xml, */*")
+            connection.setRequestProperty("Translate", "f")
+            if (requestBody != null) {
+                connection.setRequestProperty("Content-Type", "application/xml; charset=utf-8")
+                connection.doOutput = true
+                connection.outputStream.use { it.write(requestBody) }
+            }
+            val code = connection.responseCode
+            if (code !in setOf(301, 302, 303, 307, 308)) return connection
+            val location = connection.getHeaderField("Location")
+                ?.takeIf { it.isNotBlank() }
+                ?: return connection
+            target = URL(target, location)
+            connection.disconnect()
+        }
+        error("WebDAV 重定向次数过多")
     }
 
     private fun propfindUrls(config: RemoteSourceConfig, path: String): List<String> {

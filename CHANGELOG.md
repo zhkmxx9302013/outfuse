@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.36 - 2026-10-16
+
+### 中文说明
+
+- 修复自动切换、随机播放与跨播放内核切换的稳定性：播放队列不再在遇到 WMV/MPG 等兼容格式时缩减为单个视频，后续 SMB 项目会逐项建立可靠的本地回环流，避免直接 `smb://` 导致无法加载或播放失败。
+- 修复 MPG 播放黑屏与总时长始终为 `0:00`：兼容格式自动切换至 VLC 软解，本地流完整支持 `GET` / `HEAD` / HTTP Range（含后缀范围），并从 MPEG 首尾时间戳补充时长探测。
+- 修复拖动到未预加载区域后偶发无法继续播放：加固 SMB 随机读取、连接重建、超时与重试，调整缓冲策略，并防止旧媒体的迟到结束事件触发连续跳集。
+- 优化播放交互：长按倍速不再强制弹出整套播放 UI，降低倍速变化、快进/快退时的额外状态刷新；继续播放弹窗确认前不会在后台提前播放。
+- 设置页新增“播放时保持屏幕常亮”，默认开启，可按需关闭。
+- 修复 123 云盘 WebDAV 的 `405 Method Not Allowed`：PROPFIND 兼容有/无请求体两种形式，补充重定向、认证头与目录 URL 兼容处理。
+- WebDAV 来源浏览功能与 SMB 对齐：支持刷新、上一级、当前目录递归加入媒体库、筛选/排序/布局、文件操作与目录层级导航。
+- 重做来源目录浏览：返回手势/系统返回键优先回到上一级目录；左上角独立 Home 简化按钮返回来源配置首页；新增可点击面包屑，可直接跳到任意父级。
+- 优化大缩略图模式：平板每行 3 个、紧凑模式每行 2 个；文件名和信息浮于缩略图底部，卡片增加圆角、半透明毛玻璃感、描边与阴影。
+
+### English Notes
+
+- Stabilized autoplay, shuffle, and cross-engine transitions: legacy WMV/MPG items no longer collapse the queue, and every following SMB item gets its own loopback stream instead of unreliable direct `smb://` playback.
+- Fixed black-screen MPG playback and `0:00` duration by routing compatibility formats to VLC software decoding, completing GET/HEAD/Range support (including suffix ranges), and probing MPEG timestamps from the file head and tail.
+- Hardened seeks beyond the buffered range with SMB reconnect/retry behavior and guarded against stale end events that caused rapid multi-item skipping.
+- Long-press speed playback no longer forces the full controls UI open; resume prompts no longer allow playback to start in the background.
+- Added a “keep screen on during playback” setting, enabled by default.
+- Fixed WebDAV/123Pan `405 Method Not Allowed` compatibility and brought WebDAV browsing controls in line with SMB.
+- Added hierarchy-first back navigation, a dedicated source-home icon, clickable breadcrumbs, and larger glass-style thumbnail cards with overlaid metadata.
+
 ## 0.35 - 2026-10-09
 
 ### 中文说明

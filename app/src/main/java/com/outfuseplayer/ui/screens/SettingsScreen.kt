@@ -250,6 +250,16 @@ fun SettingsScreen(
                     onCheckedChange = { update(currentSettings.copy(autoPlayNext = it), if (it) "已开启自动播放下一集" else "已关闭自动播放下一集") }
                 )
                 ToggleSetting(
+                    title = "播放时保持屏幕常亮",
+                    checked = currentSettings.keepScreenOnDuringPlayback,
+                    onCheckedChange = {
+                        update(
+                            currentSettings.copy(keepScreenOnDuringPlayback = it),
+                            if (it) "播放视频时屏幕不会自动熄灭" else "播放时将跟随系统息屏设置"
+                        )
+                    }
+                )
+                ToggleSetting(
                     title = "记忆播放位置",
                     checked = currentSettings.rememberPlayback,
                     onCheckedChange = { update(currentSettings.copy(rememberPlayback = it), if (it) "会保存播放进度" else "不会保存播放进度") }
@@ -1029,5 +1039,4 @@ private fun TextValueSetting(
         )
     }
 }
-
 

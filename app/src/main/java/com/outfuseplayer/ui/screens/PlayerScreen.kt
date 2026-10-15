@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.view.TextureView
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.Surface as AndroidSurface
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -127,6 +128,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -155,8 +157,10 @@ import com.outfuseplayer.ui.theme.PrimaryOrange
 import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
 import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -347,6 +351,8 @@ fun PlayerScreen(
     playlist: List<LibraryItem>,
     expanded: Boolean,
     startShuffle: Boolean = false,
+    autoPlayNextEnabled: Boolean = true,
+    keepScreenOnDuringPlayback: Boolean = true,
     onShowFileLocation: (LibraryItem) -> Unit = {},
     onRemoveFromLibrary: (LibraryItem) -> Unit = {},
     onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
@@ -358,15 +364,34 @@ fun PlayerScreen(
     onRenameSeries: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    val activity = context as? Activity
+    DisposableEffect(activity, keepScreenOnDuringPlayback) {
+        val alreadyKeptOn = activity?.window?.attributes?.flags
+            ?.and(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            ?.let { it != 0 } ?: false
+        if (keepScreenOnDuringPlayback) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            if (keepScreenOnDuringPlayback && !alreadyKeptOn) {
+                activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
     var forceIjkFallback by remember(item.id, item.streamUrl) { mutableStateOf(false) }
     var forceExoFallback by remember(item.id, item.streamUrl) { mutableStateOf(false) }
+    var forceSmbStreamFallback by remember(item.id, item.streamUrl) { mutableStateOf(false) }
+    var fallbackItem by remember(item.id, item.streamUrl) { mutableStateOf<LibraryItem?>(null) }
+    val routedItem = fallbackItem ?: item
     val multiPlaylist = remember(item.id, playlist) {
         playlist.ifEmpty { listOf(item) }.filter { it.streamUrl != null }
     }
 
-    if (!forceExoFallback && (forceIjkFallback || item.requiresIjkPlayer())) {
+    if (!forceExoFallback && (forceIjkFallback || routedItem.requiresIjkPlayer())) {
         IjkFallbackPlayerScreen(
-            item = item,
+            item = routedItem,
             playlist = playlist,
             expanded = expanded,
             startShuffle = startShuffle,
@@ -385,9 +410,9 @@ fun PlayerScreen(
         return
     }
 
-    if (!forceExoFallback && item.requiresSmbLegacyDownload()) {
+    if (!forceExoFallback && (forceSmbStreamFallback || routedItem.requiresSmbLegacyDownload())) {
         SmbLegacyPlaybackScreen(
-            item = item,
+            item = routedItem,
             playlist = playlist,
             expanded = expanded,
             startShuffle = startShuffle,
@@ -407,9 +432,9 @@ fun PlayerScreen(
         return
     }
 
-    if (!forceExoFallback && item.requiresVlcPlayer()) {
+    if (!forceExoFallback && routedItem.requiresVlcPlayer()) {
         VlcFallbackPlayerScreen(
-            item = item,
+            item = routedItem,
             playlist = playlist,
             expanded = expanded,
             startShuffle = startShuffle,
@@ -429,8 +454,6 @@ fun PlayerScreen(
         return
     }
 
-    val context = LocalContext.current
-    val activity = context as? Activity
     val audioManager = remember { context.getSystemService(AudioManager::class.java) }
     val positionStore = remember { PlaybackPositionStore(context) }
     val settingsStore = remember { PlaybackSettingsStore(context) }
@@ -465,6 +488,7 @@ fun PlayerScreen(
             .forceDisableMediaCodecAsynchronousQueueing()
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(30_000, 120_000, 4_000, 8_000)
+            .setBackBuffer(30_000, true)
             .setTargetBufferBytes(128 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -494,6 +518,7 @@ fun PlayerScreen(
                         .build()
                 }
                 setMediaItems(mediaItems, startIndex, startPositionMs)
+                setSeekParameters(SeekParameters.CLOSEST_SYNC)
                 shuffleModeEnabled = startShuffle
                 runCatching { setWakeMode(C.WAKE_MODE_NETWORK) }
                 prepare()
@@ -525,7 +550,7 @@ fun PlayerScreen(
     var ambienceMode by remember { mutableStateOf(AmbienceMode.BALANCED) }
     var aiEnhancement by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
-    var autoPlayNext by remember { mutableStateOf(true) }
+    var autoPlayNext by remember(item.id) { mutableStateOf(autoPlayNextEnabled) }
     var sleepTimerMode by remember { mutableStateOf(SleepTimerMode.OFF) }
     var locked by remember { mutableStateOf(false) }
     var fastForwarding by remember { mutableStateOf(false) }
@@ -543,6 +568,9 @@ fun PlayerScreen(
     var durationMs by remember { mutableLongStateOf(1L) }
     var bufferedMs by remember { mutableLongStateOf(0L) }
     var leavingPlayer by remember { mutableStateOf(false) }
+    val playbackScope = rememberCoroutineScope()
+    val retryAttempts = remember(player) { mutableMapOf<String, Int>() }
+    val pendingRetries = remember(player) { mutableSetOf<String>() }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
     val inAnySeries = series.any { currentItem.id in it.itemIds }
     var videoRotation by remember(currentItem.id) { mutableStateOf(VideoRotation.DEG_0) }
@@ -588,7 +616,7 @@ fun PlayerScreen(
         }
     }
 
-    DisposableEffect(player, autoPlayNext) {
+    DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingValue: Boolean) {
                 isPlaying = isPlayingValue
@@ -597,13 +625,23 @@ fun PlayerScreen(
             override fun onMediaItemTransition(mediaItem: ExoMediaItem?, reason: Int) {
                 val nextIndex = player.currentMediaItemIndex.coerceAtLeast(0)
                 currentIndex = nextIndex
+                val nextItem = playbackItems.getOrNull(nextIndex)
+                if (nextItem != null && (
+                        nextItem.requiresIjkPlayer() ||
+                            nextItem.requiresSmbLegacyDownload() ||
+                            nextItem.requiresVlcPlayer()
+                        )
+                ) {
+                    android.util.Log.i(
+                        "OutfuseRoute",
+                        "Queue transition requires compatibility player: item=${nextItem.id}"
+                    )
+                    fallbackItem = nextItem
+                    return
+                }
                 if (!autoPlayNext && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                     player.pause()
                     player.seekTo(0L)
-                }
-                playbackItems.getOrNull(nextIndex)?.let { nextItem ->
-                    val resumeMs = positionStore.get(nextItem.id, nextItem.path)
-                    if (resumeMs > 0L) player.seekTo(resumeMs)
                 }
             }
 
@@ -613,8 +651,36 @@ fun PlayerScreen(
 
             override fun onPlayerError(error: PlaybackException) {
                 saveCurrentPosition()
-                onAutoRemoveIfMissing(currentItem)
-                forceIjkFallback = true
+                val failedIndex = player.currentMediaItemIndex.coerceAtLeast(0)
+                val failedItem = playbackItems.getOrNull(failedIndex) ?: currentItem
+                if (error.errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND) {
+                    onAutoRemoveIfMissing(failedItem)
+                }
+                val attempts = retryAttempts[failedItem.id] ?: 0
+                if (attempts < 2) {
+                    if (!pendingRetries.add(failedItem.id)) return
+                    retryAttempts[failedItem.id] = attempts + 1
+                    val retryPosition = player.currentPosition.coerceAtLeast(0L)
+                    playbackScope.launch {
+                        delay(if (attempts == 0) 250L else 900L)
+                        pendingRetries.remove(failedItem.id)
+                        if (player.currentMediaItemIndex == failedIndex) {
+                            player.seekTo(failedIndex, retryPosition)
+                            player.prepare()
+                            player.playWhenReady = true
+                        }
+                    }
+                    return
+                }
+                fallbackItem = failedItem
+                val isSmb = failedItem.streamUrl
+                    ?.let { runCatching { Uri.parse(it).scheme }.getOrNull() }
+                    .orEmpty().equals("smb", ignoreCase = true)
+                if (isSmb) {
+                    forceSmbStreamFallback = true
+                } else {
+                    forceIjkFallback = true
+                }
             }
         }
         player.addListener(listener)
@@ -673,7 +739,7 @@ fun PlayerScreen(
             .playerGestureLayer(
                 enabled = playerGesturesEnabled,
                 seekStepSeconds = seekStepSeconds,
-                refreshKey = Triple(currentItem.id, durationMs, playbackSpeed),
+                refreshKey = currentItem.id to durationMs,
                 onSingleTap = { controlsVisible = !controlsVisible },
                 onDoubleTap = {
                     if (player.isPlaying) player.pause() else player.play()
@@ -681,7 +747,6 @@ fun PlayerScreen(
                 },
                 onLongPressStart = {
                     fastForwarding = true
-                    controlsVisible = true
                     player.setPlaybackSpeed(2f)
                 },
                 onLongPressEnd = {
@@ -1281,68 +1346,25 @@ private fun SmbLegacyPlaybackScreen(
     onRenameSeries: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
-    var streamItem by remember(item.id, item.streamUrl) { mutableStateOf<LibraryItem?>(null) }
-    var error by remember(item.id, item.streamUrl) { mutableStateOf<String?>(null) }
-    var retryKey by remember(item.id) { mutableIntStateOf(0) }
-
-    DisposableEffect(item.id, item.streamUrl, retryKey) {
-        streamItem = null
-        error = null
-        var server: SmbStreamServer? = null
-
-        val uri = item.streamUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
-        val config = uri?.let { SmbCredentialRegistry.find(it) }
-        val remotePath = uri?.pathSegments?.drop(1)?.joinToString("\\")?.toRemotePath().orEmpty()
-        if (config == null || remotePath.isBlank()) {
-            error = "无法解析 SMB 来源，请从来源页重新连接后重试。"
-        } else {
-            val srv = SmbStreamServer(config, remotePath)
-            server = srv
-            runCatching {
-                srv.start()
-                streamItem = item.copy(streamUrl = srv.url())
-            }.onFailure { t ->
-                android.util.Log.e("OutfuseSMB", "stream server start failed: ${t.message}")
-                error = "无法启动本地流服务：${t.message ?: t.javaClass.simpleName}"
-            }
-        }
-
-        onDispose {
-            server?.stop()
-        }
-    }
-
-    val local = streamItem
-    when {
-        local != null -> VlcFallbackPlayerScreen(
-            item = local,
-            // VlcFallbackPlayerScreen resolves its "current item" from the
-            // playlist, so passing the original SMB queue here would make VLC
-            // open the smb:// URI again. Play only the loopback stream item.
-            playlist = emptyList(),
-            expanded = expanded,
-            startShuffle = startShuffle,
-            onShowFileLocation = onShowFileLocation,
-            onFallbackToIjk = onFallbackToIjk,
-            onFallbackToExo = onFallbackToExo,
-            onRemoveFromLibrary = onRemoveFromLibrary,
-            onAutoRemoveIfMissing = onAutoRemoveIfMissing,
-            onOpenMultiPlayer = onOpenMultiPlayer,
-            onReturnToMultiPlayer = onReturnToMultiPlayer,
-            series = series,
-            onAddToSeries = onAddToSeries,
-            onRemoveFromSeries = onRemoveFromSeries,
-            onRenameSeries = onRenameSeries,
-            onBack = onBack
-        )
-        error != null -> SmbStreamErrorScreen(
-            item = item,
-            message = error!!,
-            onRetry = { retryKey++ },
-            onBack = onBack
-        )
-        else -> SmbStreamPreparingScreen(item = item, onBack = onBack)
-    }
+    VlcFallbackPlayerScreen(
+        item = item,
+        playlist = playlist,
+        expanded = expanded,
+        startShuffle = startShuffle,
+        useSmbLoopback = true,
+        onShowFileLocation = onShowFileLocation,
+        onFallbackToIjk = onFallbackToIjk,
+        onFallbackToExo = onFallbackToExo,
+        onRemoveFromLibrary = onRemoveFromLibrary,
+        onAutoRemoveIfMissing = onAutoRemoveIfMissing,
+        onOpenMultiPlayer = onOpenMultiPlayer,
+        onReturnToMultiPlayer = onReturnToMultiPlayer,
+        series = series,
+        onAddToSeries = onAddToSeries,
+        onRemoveFromSeries = onRemoveFromSeries,
+        onRenameSeries = onRenameSeries,
+        onBack = onBack
+    )
 }
 
 @Composable
@@ -1470,6 +1492,7 @@ private fun VlcFallbackPlayerScreen(
     playlist: List<LibraryItem>,
     expanded: Boolean,
     startShuffle: Boolean,
+    useSmbLoopback: Boolean = false,
     onShowFileLocation: (LibraryItem) -> Unit,
     onFallbackToIjk: () -> Unit,
     onFallbackToExo: () -> Unit = {},
@@ -1504,6 +1527,57 @@ private fun VlcFallbackPlayerScreen(
         mutableStateOf(playbackItems.indexOfFirst { it.id == item.id }.takeIf { it >= 0 } ?: 0)
     }
     val currentItem = playbackItems.getOrNull(currentIndex) ?: item
+    var resolvedPlaybackUri by remember(currentItem.id, currentItem.streamUrl) { mutableStateOf<Uri?>(null) }
+    var streamPreparationError by remember(currentItem.id, currentItem.streamUrl) { mutableStateOf<String?>(null) }
+    var durationProbeServer by remember(currentItem.id, currentItem.streamUrl) { mutableStateOf<SmbStreamServer?>(null) }
+    var probedDurationMs by remember(currentItem.id, currentItem.streamUrl) { mutableLongStateOf(0L) }
+    var streamRetryKey by remember(currentItem.id, currentItem.streamUrl) { mutableIntStateOf(0) }
+
+    DisposableEffect(currentItem.id, currentItem.streamUrl, useSmbLoopback, streamRetryKey) {
+        resolvedPlaybackUri = null
+        streamPreparationError = null
+        durationProbeServer = null
+        probedDurationMs = 0L
+        var server: SmbStreamServer? = null
+        val sourceUri = currentItem.streamUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (useSmbLoopback && sourceUri?.scheme.equals("smb", ignoreCase = true)) {
+            val config = sourceUri?.let { SmbCredentialRegistry.find(it) }
+            val remotePath = sourceUri?.pathSegments?.drop(1)?.joinToString("\\")?.toRemotePath().orEmpty()
+            if (config == null || remotePath.isBlank()) {
+                streamPreparationError = "无法解析 SMB 来源，请从来源页重新连接后重试。"
+            } else {
+                val nextServer = SmbStreamServer(config, remotePath)
+                server = nextServer
+                runCatching {
+                    nextServer.start()
+                    resolvedPlaybackUri = Uri.parse(nextServer.url())
+                    durationProbeServer = nextServer
+                    android.util.Log.i("OutfuseSMB", "Loopback ready item=${currentItem.id}")
+                }.onFailure { error ->
+                    streamPreparationError = "无法启动本地流服务：${error.message ?: error.javaClass.simpleName}"
+                    android.util.Log.e("OutfuseSMB", "stream server start failed: ${error.message}")
+                }
+            }
+        } else {
+            resolvedPlaybackUri = resolveVlcStreamUri(currentItem)
+                ?: sourceUri
+                ?: run {
+                    streamPreparationError = "当前条目缺少可播放地址。"
+                    null
+                }
+        }
+        onDispose {
+            if (durationProbeServer === server) durationProbeServer = null
+            server?.stop()
+        }
+    }
+
+    LaunchedEffect(durationProbeServer, currentItem.id) {
+        val server = durationProbeServer ?: return@LaunchedEffect
+        val estimate = withContext(Dispatchers.IO) { server.estimateMpegDurationMs() } ?: return@LaunchedEffect
+        probedDurationMs = estimate
+        android.util.Log.i("OutfuseSMB", "MPEG duration item=${currentItem.id} durationMs=$estimate")
+    }
     val inAnySeries = series.any { currentItem.id in it.itemIds }
     val libVlcResult = remember {
         runCatching {
@@ -1573,6 +1647,7 @@ private fun VlcFallbackPlayerScreen(
     var showResumeDialog by remember(item.id) { mutableStateOf(savedPositionMs > 15_000) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(1L) }
+    var playbackStartedAtElapsed by remember { mutableLongStateOf(0L) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var externalSubtitleUri by remember { mutableStateOf<String?>(null) }
     var leavingPlayer by remember { mutableStateOf(false) }
@@ -1651,14 +1726,14 @@ private fun VlcFallbackPlayerScreen(
         pendingSeekMs = if (resumeFromStart) 0L else positionStore.get(currentItem.id, currentItem.path)
         runCatching {
             player.stop()
-            val uri = resolveVlcStreamUri(currentItem) ?: Uri.parse(requireNotNull(currentItem.streamUrl))
+            val uri = requireNotNull(resolvedPlaybackUri) {
+                streamPreparationError ?: "播放地址尚未准备完成"
+            }
             val media = Media(libVlc, uri).apply {
                 setHWDecoderEnabled(false, false)
-                addOption(":network-caching=1200")
-                addOption(":file-caching=600")
-                addOption(":live-caching=1200")
-                addOption(":clock-jitter=0")
-                addOption(":clock-synchro=0")
+                addOption(":network-caching=3000")
+                addOption(":file-caching=1000")
+                addOption(":live-caching=3000")
             }
             player.media = media
             media.release()
@@ -1692,6 +1767,7 @@ private fun VlcFallbackPlayerScreen(
                 VlcMediaPlayer.Event.Playing -> {
                     isPrepared = true
                     isPlaying = true
+                    playbackStartedAtElapsed = SystemClock.elapsedRealtime()
                     errorMessage = null
                     if (pendingSeekMs > 0) {
                         player.time = pendingSeekMs
@@ -1708,22 +1784,36 @@ private fun VlcFallbackPlayerScreen(
                     if (event.lengthChanged > 0) durationMs = event.lengthChanged
                 }
                 VlcMediaPlayer.Event.EndReached -> {
-                    savePosition()
-                    if (autoPlayNext && currentIndex < playbackItems.lastIndex) {
-                        currentIndex += 1
-                    } else {
+                    val playedForMs = (SystemClock.elapsedRealtime() - playbackStartedAtElapsed)
+                        .coerceAtLeast(0L)
+                    val nearKnownEnd = durationMs > 1_000L &&
+                        positionMs >= (durationMs - 3_000L).coerceAtLeast(0L)
+                    val credibleUnknownEnd = durationMs <= 1_000L && playedForMs >= 5_000L
+                    if (isPrepared && (nearKnownEnd || credibleUnknownEnd)) {
+                        savePosition()
+                        isPrepared = false
                         isPlaying = false
-                        controlsVisible = true
+                        playbackStartedAtElapsed = 0L
+                        if (autoPlayNext && currentIndex < playbackItems.lastIndex) {
+                            currentIndex += 1
+                        } else {
+                            controlsVisible = true
+                        }
+                    } else {
+                        android.util.Log.w(
+                            "OutfuseVLC",
+                            "Ignored stale EndReached item=${currentItem.id} position=$positionMs duration=$durationMs playedFor=$playedForMs"
+                        )
                     }
                 }
                 VlcMediaPlayer.Event.EncounteredError -> {
-                    android.util.Log.e("OutfuseVLC", "EncounteredError for ${currentItem.streamUrl} (${currentItem.originalTitle ?: currentItem.title})")
+                    android.util.Log.e("OutfuseVLC", "Playback error for item=${currentItem.id}")
                     isPlaying = false
                     isPrepared = false
                     controlsVisible = true
-                    errorMessage = "正在切换播放内核"
+                    errorMessage = if (useSmbLoopback) "播放失败，请重试。" else "正在切换播放内核"
                     onAutoRemoveIfMissing(currentItem)
-                    onFallbackToIjk()
+                    if (!useSmbLoopback) onFallbackToIjk()
                 }
             }
         }
@@ -1736,23 +1826,23 @@ private fun VlcFallbackPlayerScreen(
         }
     }
 
-    LaunchedEffect(currentItem.id, currentItem.streamUrl, resumeFromStart) {
+    LaunchedEffect(currentItem.id, resolvedPlaybackUri, resumeFromStart, showResumeDialog) {
+        val uri = resolvedPlaybackUri ?: return@LaunchedEffect
+        if (showResumeDialog) return@LaunchedEffect
         isPrepared = false
         isPlaying = false
         errorMessage = null
         positionMs = 0L
-        durationMs = 1L
+        durationMs = probedDurationMs.coerceAtLeast(1L)
+        playbackStartedAtElapsed = 0L
         pendingSeekMs = if (resumeFromStart) 0L else positionStore.get(currentItem.id, currentItem.path)
         runCatching {
             player.stop()
-            val uri = resolveVlcStreamUri(currentItem) ?: Uri.parse(requireNotNull(currentItem.streamUrl))
             val media = Media(libVlc, uri).apply {
                 setHWDecoderEnabled(false, false)
-                addOption(":network-caching=1200")
-                addOption(":file-caching=600")
-                addOption(":live-caching=1200")
-                addOption(":clock-jitter=0")
-                addOption(":clock-synchro=0")
+                addOption(":network-caching=3000")
+                addOption(":file-caching=1000")
+                addOption(":live-caching=3000")
             }
             player.media = media
             media.release()
@@ -1764,6 +1854,10 @@ private fun VlcFallbackPlayerScreen(
             errorMessage = "兼容播放器初始化失败：${error.message ?: error.javaClass.simpleName}"
             onAutoRemoveIfMissing(currentItem)
         }
+    }
+
+    LaunchedEffect(probedDurationMs, currentItem.id) {
+        if (probedDurationMs > 0L && durationMs <= 1L) durationMs = probedDurationMs
     }
 
     LaunchedEffect(soundBoost) {
@@ -1838,7 +1932,6 @@ private fun VlcFallbackPlayerScreen(
                     onDoubleTap = { togglePlayback() },
                     onLongPressStart = {
                         fastForwarding = true
-                        controlsVisible = true
                         runCatching { player.rate = 2f }
                     },
                     onLongPressEnd = {
@@ -1910,6 +2003,15 @@ private fun VlcFallbackPlayerScreen(
             PlayerErrorPanel(
                 message = message,
                 onRetry = ::retryPlayback,
+                onFallbackToExo = { onFallbackToExo() },
+                onRemoveFromLibrary = { onRemoveFromLibrary(currentItem) },
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+        streamPreparationError?.let { message ->
+            PlayerErrorPanel(
+                message = message,
+                onRetry = { streamRetryKey += 1 },
                 onFallbackToExo = { onFallbackToExo() },
                 onRemoveFromLibrary = { onRemoveFromLibrary(currentItem) },
                 modifier = Modifier.align(Alignment.Center)
@@ -2346,6 +2448,7 @@ private fun IjkFallbackPlayerScreen(
             isPlaying = false
             isPrepared = false
             controlsVisible = true
+            android.util.Log.e("OutfuseRoute", "IJK error what=$what extra=$extra item=${currentItem.id}")
             errorMessage = ijkErrorText(what, extra)
             onAutoRemoveIfMissing(currentItem)
             true
@@ -2468,7 +2571,6 @@ private fun IjkFallbackPlayerScreen(
                     onLongPressStart = {
                         if (isPrepared) {
                             fastForwarding = true
-                            controlsVisible = true
                             runCatching { player.setSpeed(2f) }
                         }
                     },
@@ -4100,5 +4202,3 @@ internal fun LibraryItem.playbackMimeType(): String? {
         else -> null
     }
 }
-
-

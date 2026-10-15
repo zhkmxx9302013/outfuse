@@ -34,6 +34,7 @@ data class AppSettings(
     val traktLinked: Boolean = false,
     val darkTheme: Boolean = true,
     val autoPlayNext: Boolean = true,
+    val keepScreenOnDuringPlayback: Boolean = true,
     val cacheArtworkOnWifi: Boolean = true,
     val rememberPlayback: Boolean = true,
     val showDiagnostics: Boolean = true,
@@ -79,6 +80,7 @@ class SettingsStore(context: Context) {
         traktLinked = prefs.getBoolean(KEY_TRAKT_LINKED, false),
         darkTheme = prefs.getBoolean(KEY_DARK_THEME, true),
         autoPlayNext = prefs.getBoolean(KEY_AUTO_PLAY_NEXT, true),
+        keepScreenOnDuringPlayback = prefs.getBoolean(KEY_KEEP_SCREEN_ON_DURING_PLAYBACK, true),
         cacheArtworkOnWifi = prefs.getBoolean(KEY_CACHE_ARTWORK_WIFI, true),
         rememberPlayback = prefs.getBoolean(KEY_REMEMBER_PLAYBACK, true),
         showDiagnostics = prefs.getBoolean(KEY_SHOW_DIAGNOSTICS, true),
@@ -122,6 +124,7 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_TRAKT_LINKED, settings.traktLinked)
             .putBoolean(KEY_DARK_THEME, settings.darkTheme)
             .putBoolean(KEY_AUTO_PLAY_NEXT, settings.autoPlayNext)
+            .putBoolean(KEY_KEEP_SCREEN_ON_DURING_PLAYBACK, settings.keepScreenOnDuringPlayback)
             .putBoolean(KEY_CACHE_ARTWORK_WIFI, settings.cacheArtworkOnWifi)
             .putBoolean(KEY_REMEMBER_PLAYBACK, settings.rememberPlayback)
             .putBoolean(KEY_SHOW_DIAGNOSTICS, settings.showDiagnostics)
@@ -183,6 +186,7 @@ class SettingsStore(context: Context) {
         private const val KEY_TRAKT_LINKED = "trakt_linked"
         private const val KEY_DARK_THEME = "dark_theme"
         private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
+        private const val KEY_KEEP_SCREEN_ON_DURING_PLAYBACK = "keep_screen_on_during_playback"
         private const val KEY_CACHE_ARTWORK_WIFI = "cache_artwork_wifi"
         private const val KEY_REMEMBER_PLAYBACK = "remember_playback"
         private const val KEY_SHOW_DIAGNOSTICS = "show_diagnostics"

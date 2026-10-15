@@ -27,6 +27,7 @@ import com.outfuseplayer.data.remote.WebDavRepository
 import com.outfuseplayer.data.remote.WebDavUriScheme
 import java.util.EnumSet
 import java.util.LinkedHashMap
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -181,6 +182,10 @@ private class WebDavMediaDataSource : BaseDataSource(true) {
     private var connection: HttpURLConnection? = null
     private var stream: InputStream? = null
     private var remaining = C.LENGTH_UNSET.toLong()
+    private var streamUrl: String? = null
+    private var requestHeaders: Map<String, String> = emptyMap()
+    private var readPosition = 0L
+    private var reconnectAttempts = 0
 
     override fun open(dataSpec: DataSpec): Long {
         transferInitializing(dataSpec)
@@ -188,31 +193,12 @@ private class WebDavMediaDataSource : BaseDataSource(true) {
         val parsedUri = requireNotNull(uri)
         val config = RemoteSourceRegistry.find(parsedUri) ?: error("缺少 WebDAV 凭据，请从来源页重新连接")
         val remotePath = parsedUri.pathSegments.joinToString("/")
-        val streamUrl = WebDavRepository().streamUrl(config, remotePath)
-        val nextConnection = URL(streamUrl).openConnection() as HttpURLConnection
-        WebDavRepository().streamHeaders(config).forEach { (key, value) ->
-            nextConnection.setRequestProperty(key, value)
-        }
-        nextConnection.setRequestProperty("User-Agent", "outfuse/0.1 Android")
-        nextConnection.setRequestProperty("Accept-Encoding", "identity")
-        nextConnection.setRequestProperty("Connection", "keep-alive")
-        nextConnection.connectTimeout = 15_000
-        nextConnection.readTimeout = 45_000
-        if (dataSpec.position > 0 || dataSpec.length != C.LENGTH_UNSET.toLong()) {
-            val end = if (dataSpec.length == C.LENGTH_UNSET.toLong()) "" else (dataSpec.position + dataSpec.length - 1).toString()
-            nextConnection.setRequestProperty("Range", "bytes=${dataSpec.position}-$end")
-        }
-        val code = nextConnection.responseCode
-        if (code !in listOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_PARTIAL)) {
-            error("WebDAV HTTP $code")
-        }
-        connection = nextConnection
-        stream = nextConnection.inputStream
-        remaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
-            dataSpec.length
-        } else {
-            nextConnection.contentLengthLong.takeIf { it >= 0 } ?: C.LENGTH_UNSET.toLong()
-        }
+        val repository = WebDavRepository()
+        streamUrl = repository.streamUrl(config, remotePath)
+        requestHeaders = repository.streamHeaders(config)
+        readPosition = dataSpec.position
+        reconnectAttempts = 0
+        remaining = connectAt(dataSpec.position, dataSpec.length)
         opened = true
         transferStarted(dataSpec)
         return remaining
@@ -222,11 +208,77 @@ private class WebDavMediaDataSource : BaseDataSource(true) {
         if (length == 0) return 0
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
         val targetLength = if (remaining == C.LENGTH_UNSET.toLong()) length else min(length.toLong(), remaining).toInt()
-        val bytesRead = stream?.read(buffer, offset, targetLength) ?: C.RESULT_END_OF_INPUT
+        val bytesRead = try {
+            stream?.read(buffer, offset, targetLength) ?: C.RESULT_END_OF_INPUT
+        } catch (error: IOException) {
+            if (reconnectAttempts >= 2) throw error
+            reconnectAttempts++
+            reconnectAtCurrentPosition()
+            stream?.read(buffer, offset, targetLength) ?: C.RESULT_END_OF_INPUT
+        }
         if (bytesRead <= 0) return C.RESULT_END_OF_INPUT
         if (remaining != C.LENGTH_UNSET.toLong()) remaining -= bytesRead
+        readPosition += bytesRead
+        reconnectAttempts = 0
         bytesTransferred(bytesRead)
         return bytesRead
+    }
+
+    private fun reconnectAtCurrentPosition() {
+        runCatching { stream?.close() }
+        connection?.disconnect()
+        stream = null
+        connection = null
+        remaining = connectAt(readPosition, remaining)
+    }
+
+    private fun connectAt(position: Long, requestedLength: Long): Long {
+        val targetUrl = streamUrl ?: error("WebDAV 播放地址无效")
+        val nextConnection = URL(targetUrl).openConnection() as HttpURLConnection
+        requestHeaders.forEach { (key, value) -> nextConnection.setRequestProperty(key, value) }
+        nextConnection.setRequestProperty("User-Agent", "outfuse/0.36 Android")
+        nextConnection.setRequestProperty("Accept-Encoding", "identity")
+        nextConnection.setRequestProperty("Connection", "keep-alive")
+        nextConnection.connectTimeout = 15_000
+        nextConnection.readTimeout = 45_000
+        if (position > 0 || requestedLength != C.LENGTH_UNSET.toLong()) {
+            val end = if (requestedLength == C.LENGTH_UNSET.toLong()) "" else (position + requestedLength - 1).toString()
+            nextConnection.setRequestProperty("Range", "bytes=$position-$end")
+        }
+        val code = nextConnection.responseCode
+        if (code == 416) {
+            nextConnection.disconnect()
+            connection = null
+            stream = null
+            return 0L
+        }
+        if (code !in listOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_PARTIAL)) {
+            val message = nextConnection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            nextConnection.disconnect()
+            error("WebDAV HTTP $code $message")
+        }
+        val nextStream = nextConnection.inputStream
+        // Some WebDAV/CDN endpoints ignore Range and answer 200. Starting to
+        // decode from byte zero after a forward seek corrupts the stream state;
+        // skip to the requested byte so the DataSource contract remains valid.
+        if (code == HttpURLConnection.HTTP_OK && position > 0) {
+            try {
+                nextStream.skipExactly(position)
+            } catch (error: Throwable) {
+                runCatching { nextStream.close() }
+                nextConnection.disconnect()
+                throw error
+            }
+        }
+        connection = nextConnection
+        stream = nextStream
+        val responseLength = nextConnection.contentLengthLong.takeIf { it >= 0 }
+        return when {
+            requestedLength != C.LENGTH_UNSET.toLong() -> requestedLength
+            code == HttpURLConnection.HTTP_OK && responseLength != null -> (responseLength - position).coerceAtLeast(0L)
+            responseLength != null -> responseLength
+            else -> C.LENGTH_UNSET.toLong()
+        }
     }
 
     override fun getUri(): Uri? = uri
@@ -237,10 +289,29 @@ private class WebDavMediaDataSource : BaseDataSource(true) {
         connection?.disconnect()
         stream = null
         connection = null
+        streamUrl = null
+        requestHeaders = emptyMap()
+        readPosition = 0L
+        reconnectAttempts = 0
         if (opened) {
             opened = false
             transferEnded()
         }
+    }
+}
+
+private fun InputStream.skipExactly(byteCount: Long) {
+    var remaining = byteCount
+    val scratch = ByteArray(64 * 1024)
+    while (remaining > 0) {
+        val skipped = skip(remaining)
+        if (skipped > 0) {
+            remaining -= skipped
+            continue
+        }
+        val read = read(scratch, 0, min(scratch.size.toLong(), remaining).toInt())
+        if (read < 0) throw IOException("WebDAV 服务未返回请求的 Range")
+        remaining -= read
     }
 }
 
@@ -277,26 +348,7 @@ private class SmbMediaDataSource : BaseDataSource(true) {
         // only the file handle (bound to the requested offset) is re-created.
         // A stale pooled connection makes getFileInformation/openFile throw, so
         // release (or close) it on failure instead of leaking it checked-out.
-        val conn = SmbConnectionPool.acquire(config)
-        val nextFile = try {
-            val size = conn.share.getFileInformation(remotePath).standardInformation.endOfFile
-            val opened = conn.share.openFile(
-                remotePath,
-                setOf(AccessMask.GENERIC_READ),
-                EnumSet.noneOf(FileAttributes::class.java),
-                SMB2ShareAccess.ALL,
-                SMB2CreateDisposition.FILE_OPEN,
-                setOf(SMB2CreateOptions.FILE_NON_DIRECTORY_FILE, SMB2CreateOptions.FILE_RANDOM_ACCESS)
-            )
-            size to opened
-        } catch (t: Throwable) {
-            // A stale/broken connection often still reports isConnected == true,
-            // so tear it down instead of pooling it: the next open builds a fresh
-            // one rather than re-failing on the same half-open connection.
-            conn.closeQuietly()
-            throw t
-        }
-        val (size, fileHandle) = nextFile
+        val (conn, size, fileHandle) = openRemoteFile(config, remotePath)
 
         pooledConnection = conn
         file = fileHandle
@@ -312,6 +364,34 @@ private class SmbMediaDataSource : BaseDataSource(true) {
         opened = true
         transferStarted(dataSpec)
         return remaining
+    }
+
+    private fun openRemoteFile(
+        config: SmbConfig,
+        remotePath: String
+    ): Triple<SmbConnection, Long, com.hierynomus.smbj.share.File> {
+        var lastError: Throwable? = null
+        repeat(2) {
+            val connection = SmbConnectionPool.acquire(config)
+            try {
+                val size = connection.share.getFileInformation(remotePath).standardInformation.endOfFile
+                val fileHandle = connection.share.openFile(
+                    remotePath,
+                    setOf(AccessMask.GENERIC_READ),
+                    EnumSet.noneOf(FileAttributes::class.java),
+                    SMB2ShareAccess.ALL,
+                    SMB2CreateDisposition.FILE_OPEN,
+                    setOf(SMB2CreateOptions.FILE_NON_DIRECTORY_FILE, SMB2CreateOptions.FILE_RANDOM_ACCESS)
+                )
+                return Triple(connection, size, fileHandle)
+            } catch (error: Throwable) {
+                // isConnected can remain true for a half-open NAS session. Tear
+                // it down and retry once with a fresh authenticated connection.
+                connection.closeQuietly()
+                lastError = error
+            }
+        }
+        throw lastError ?: IOException("无法打开 SMB 文件")
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
@@ -389,5 +469,3 @@ private class SmbMediaDataSource : BaseDataSource(true) {
         )
     }
 }
-
-

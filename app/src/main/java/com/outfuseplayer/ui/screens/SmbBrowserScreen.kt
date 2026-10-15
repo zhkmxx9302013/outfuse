@@ -27,9 +27,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -65,6 +65,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,6 +95,8 @@ import com.outfuseplayer.ui.FileAction
 import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
 import com.outfuseplayer.ui.components.InLibraryBadge
+import com.outfuseplayer.ui.components.DirectoryBreadcrumbs
+import com.outfuseplayer.ui.components.DirectoryCrumb
 import com.outfuseplayer.ui.enumValueOrDefault
 import com.outfuseplayer.ui.filterEntriesFor
 import com.outfuseplayer.ui.sortedEntriesFor
@@ -116,7 +121,6 @@ fun SmbBrowserScreen(
     onMediaRemoved: (String, List<String>) -> Unit = { _, _ -> },
     onOpenMedia: (LibraryItem, List<LibraryItem>) -> Unit = { _, _ -> }
 ) {
-    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val viewStateStore = remember { SourceBrowserViewStateStore(context) }
@@ -144,6 +148,7 @@ fun SmbBrowserScreen(
     var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.layoutName) }
     var filterName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.filterName) }
     var actionEntry by remember { mutableStateOf<SmbEntry?>(null) }
+    val rootPath = remember(initialConfig.sourceId, initialConfig.path) { initialConfig.path.toRemotePath() }
     val sort = enumValueOrDefault(sortName, MediaSort.NAME)
     val layout = enumValueOrDefault(layoutName, MediaLayout.LIST)
     val filter = enumValueOrDefault(filterName, MediaEntryFilter.ALL)
@@ -153,6 +158,20 @@ fun SmbBrowserScreen(
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val normalizedHighlight = highlightPath?.toRemotePath()
+
+    fun navigateUp() {
+        val normalizedCurrent = currentPath.toRemotePath()
+        if (!normalizedCurrent.equals(rootPath, ignoreCase = true)) {
+            val parent = normalizedCurrent.parentSmbPath()
+            currentPath = when {
+                rootPath.isBlank() -> parent
+                parent.equals(rootPath, ignoreCase = true) || parent.startsWith("$rootPath\\", ignoreCase = true) -> parent
+                else -> rootPath
+            }
+        }
+    }
+
+    BackHandler(onBack = ::navigateUp)
 
     fun activeConfig(): SmbConfig = initialConfig.copy(path = currentPath)
 
@@ -226,7 +245,6 @@ fun SmbBrowserScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         SmbBrowserTopBar(
             title = initialConfig.name.ifBlank { "SMB" },
-            path = currentPath.ifBlank { "/" },
             expanded = expanded,
             busy = busy,
             onBack = onBack,
@@ -241,10 +259,15 @@ fun SmbBrowserScreen(
                 .padding(horizontal = if (expanded) 32.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            DirectoryBreadcrumbs(
+                crumbs = smbDirectoryCrumbs(rootPath, currentPath),
+                onNavigate = { currentPath = it },
+                modifier = Modifier.fillMaxWidth()
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
-                    enabled = !busy && currentPath.isNotBlank(),
-                    onClick = { currentPath = currentPath.parentSmbPath() },
+                    enabled = !busy && !currentPath.toRemotePath().equals(rootPath, ignoreCase = true),
+                    onClick = ::navigateUp,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(7.dp),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
@@ -337,7 +360,13 @@ fun SmbBrowserScreen(
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = if (layout == MediaLayout.LARGE) 150.dp else 108.dp),
+                    columns = GridCells.Fixed(
+                        when (layout) {
+                            MediaLayout.LARGE -> if (expanded) 3 else 2
+                            MediaLayout.SMALL -> if (expanded) 5 else 3
+                            MediaLayout.LIST -> 1
+                        }
+                    ),
                     modifier = Modifier.fillMaxSize(),
                     state = gridState,
                     contentPadding = PaddingValues(bottom = 24.dp),
@@ -410,7 +439,6 @@ fun SmbBrowserScreen(
 @Composable
 private fun SmbBrowserTopBar(
     title: String,
-    path: String,
     expanded: Boolean,
     busy: Boolean,
     onBack: () -> Unit,
@@ -425,11 +453,16 @@ private fun SmbBrowserTopBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         IconButton(onClick = onBack) {
-            Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onBackground)
+            Icon(
+                Icons.Outlined.Home,
+                contentDescription = "返回来源首页",
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(20.dp)
+            )
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
-            Text(path, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("目录浏览 · 侧滑返回上一级", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         }
         if (busy) {
             CircularProgressIndicator(color = PrimaryOrange, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
@@ -659,59 +692,99 @@ private fun BrowserEntryCard(
     onClick: () -> Unit
 ) {
     val enabled = entry.isDirectory || entry.isMedia
+    val shape = RoundedCornerShape(if (compact) 13.dp else 18.dp)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .shadow(if (compact) 4.dp else 10.dp, shape, clip = false)
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        color = if (highlighted) PrimaryOrange.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, if (highlighted) PrimaryOrange.copy(alpha = 0.82f) else Color.White.copy(alpha = 0.13f))
     ) {
-        Column(
-            modifier = Modifier.padding(if (compact) 8.dp else 10.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(if (compact) 1.08f else 1.42f)
+                .clip(shape)
         ) {
-            Box {
-                BrowserEntryPreview(
-                    entry = entry,
-                    previewItem = previewItem,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(if (compact) 1.15f else 1.35f)
-                )
-                if (inLibrary) {
-                    InLibraryBadge(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp))
+            BrowserEntryPreview(
+                entry = entry,
+                previewItem = previewItem,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.52f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.76f)
+                        )
+                    )
+            )
+            if (inLibrary) {
+                InLibraryBadge(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp))
+            }
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(if (compact) 6.dp else 9.dp),
+                shape = RoundedCornerShape(if (compact) 9.dp else 12.dp),
+                color = Color(0xFF171A20).copy(alpha = 0.66f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+                shadowElevation = if (compact) 2.dp else 5.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = if (compact) 8.dp else 11.dp, top = 7.dp, bottom = 7.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        FileNameText(
+                            text = entry.name,
+                            mode = fileNameMode,
+                            style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
+                            color = Color.White,
+                            foldedLines = if (compact) 1 else 2,
+                            expandedLines = if (compact) 2 else 3
+                        )
+                        Text(
+                            text = when {
+                                highlighted -> "当前文件 · ${entry.size.toReadableSize()}"
+                                entry.isDirectory -> "文件夹"
+                                entry.isImage -> "图片 · ${entry.size.toReadableSize()}"
+                                entry.isVideo -> "视频 · ${entry.size.toReadableSize()}"
+                                else -> entry.size.toReadableSize()
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(onClick = onActionClick, modifier = Modifier.size(if (compact) 30.dp else 34.dp)) {
+                        Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = Color.White.copy(alpha = 0.88f))
+                    }
                 }
             }
-            FileNameText(
-                text = entry.name,
-                mode = fileNameMode,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                foldedLines = if (compact) 1 else 1,
-                expandedLines = if (compact) 2 else 3
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = when {
-                        highlighted -> "当前文件 · ${entry.size.toReadableSize()}"
-                        entry.isDirectory -> "文件夹"
-                        entry.isImage -> "图片 · ${entry.size.toReadableSize()}"
-                        entry.isVideo -> "视频 · ${entry.size.toReadableSize()}"
-                        else -> entry.size.toReadableSize()
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = onActionClick, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Outlined.MoreVert, contentDescription = "文件管理", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (entry.isDirectory) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color.Black.copy(alpha = 0.34f),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(Icons.Outlined.Folder, contentDescription = null, tint = PrimaryAmber, modifier = Modifier.size(15.dp))
+                        Text("目录", style = MaterialTheme.typography.labelSmall, color = Color.White)
+                    }
                 }
             }
         }
@@ -821,9 +894,25 @@ private fun BrowserEntryPreview(
     }
 }
 
+private fun smbDirectoryCrumbs(rootPath: String, currentPath: String): List<DirectoryCrumb> {
+    val root = rootPath.toRemotePath()
+    val current = currentPath.toRemotePath()
+    val crumbs = mutableListOf(DirectoryCrumb("根目录", root))
+    val relative = when {
+        root.isBlank() -> current
+        current.equals(root, ignoreCase = true) -> ""
+        current.startsWith("$root\\", ignoreCase = true) -> current.substring(root.length).trimStart('\\')
+        else -> ""
+    }
+    var target = root
+    relative.split('\\').filter { it.isNotBlank() }.forEach { segment ->
+        target = if (target.isBlank()) segment else "$target\\$segment"
+        crumbs += DirectoryCrumb(segment, target)
+    }
+    return crumbs
+}
+
 private fun String.parentSmbPath(): String {
     val normalized = trim().trim('\\', '/').replace("/", "\\")
     return normalized.substringBeforeLast("\\", missingDelimiterValue = "")
 }
-
-
