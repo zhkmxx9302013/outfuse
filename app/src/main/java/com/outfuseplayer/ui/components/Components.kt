@@ -74,6 +74,8 @@ import com.outfuseplayer.data.UserSeries
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.ui.FileNameDisplayMode
+import com.outfuseplayer.ui.ThumbnailInfoMode
+import com.outfuseplayer.ui.thumbnailInfo
 import com.outfuseplayer.ui.theme.ElectricBlue
 import com.outfuseplayer.ui.theme.PrimaryAmber
 import com.outfuseplayer.ui.theme.PrimaryOrange
@@ -81,6 +83,7 @@ import com.outfuseplayer.ui.theme.SoftTeal
 import com.outfuseplayer.ui.theme.Surface as OutfuseSurface
 import com.outfuseplayer.ui.theme.Surface2
 import com.outfuseplayer.ui.theme.TextMuted
+import kotlinx.coroutines.delay
 import java.nio.ByteBuffer
 
 /**
@@ -282,6 +285,7 @@ fun MediaRail(
     posterWidth: Dp = 116.dp,
     series: List<UserSeries> = emptyList(),
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
+    thumbnailInfoMode: ThumbnailInfoMode = ThumbnailInfoMode.NONE,
     action: String? = null,
     onActionClick: (() -> Unit)? = null
 ) {
@@ -296,7 +300,8 @@ fun MediaRail(
                     item = item,
                     onClick = { onItemClick(item) },
                     width = posterWidth,
-                    fileNameMode = fileNameMode
+                    fileNameMode = fileNameMode,
+                    thumbnailInfoMode = thumbnailInfoMode
                 )
             }
         }
@@ -311,8 +316,9 @@ fun PosterCard(
     width: Dp = 120.dp,
     showProgress: Boolean = true,
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
-    seriesLabels: List<String> = emptyList()
+    thumbnailInfoMode: ThumbnailInfoMode = ThumbnailInfoMode.NONE
 ) {
+    val thumbnailInfo = item.thumbnailInfo(thumbnailInfoMode)
     val shape = RoundedCornerShape(18.dp)
     Card(
         modifier = modifier
@@ -371,15 +377,15 @@ fun PosterCard(
                         foldedLines = 2,
                         expandedLines = 3
                     )
-                    Text(
-                        text = seriesLabels.firstOrNull()
-                            ?: item.year?.toString()
-                            ?: item.durationLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.74f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (!thumbnailInfo.isNullOrBlank()) {
+                        Text(
+                            text = thumbnailInfo,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.74f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
             if (showProgress && item.progress > 0f) {
@@ -411,6 +417,10 @@ fun FilePreviewThumb(
 
     LaunchedEffect(item.id, item.streamUrl) {
         thumbnail = ThumbnailRepository.thumbnail(context, item)
+        delay(1_500)
+        ThumbnailRepository.thumbnail(context, item)?.let { refreshed ->
+            thumbnail = refreshed
+        }
     }
 
     val accent = if (item.itemType == LibraryItemType.IMAGE) SoftTeal else PrimaryOrange

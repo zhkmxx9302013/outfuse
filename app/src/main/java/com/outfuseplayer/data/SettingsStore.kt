@@ -35,6 +35,7 @@ data class AppSettings(
     val darkTheme: Boolean = true,
     val autoPlayNext: Boolean = true,
     val keepScreenOnDuringPlayback: Boolean = true,
+    val showVideoControls: Boolean = true,
     val cacheArtworkOnWifi: Boolean = true,
     val rememberPlayback: Boolean = true,
     val showDiagnostics: Boolean = true,
@@ -42,6 +43,7 @@ data class AppSettings(
     val fileDownloadTreeUri: String = "",
     val firstRunGuideSeen: Boolean = false,
     val fileNameDisplayMode: String = "ELLIPSIS",
+    val thumbnailInfoMode: String = "NONE",
     val imageSlideshowIntervalSeconds: Int = 4
 )
 
@@ -81,6 +83,7 @@ class SettingsStore(context: Context) {
         darkTheme = prefs.getBoolean(KEY_DARK_THEME, true),
         autoPlayNext = prefs.getBoolean(KEY_AUTO_PLAY_NEXT, true),
         keepScreenOnDuringPlayback = prefs.getBoolean(KEY_KEEP_SCREEN_ON_DURING_PLAYBACK, true),
+        showVideoControls = prefs.getBoolean(KEY_SHOW_VIDEO_CONTROLS, true),
         cacheArtworkOnWifi = prefs.getBoolean(KEY_CACHE_ARTWORK_WIFI, true),
         rememberPlayback = prefs.getBoolean(KEY_REMEMBER_PLAYBACK, true),
         showDiagnostics = prefs.getBoolean(KEY_SHOW_DIAGNOSTICS, true),
@@ -88,6 +91,7 @@ class SettingsStore(context: Context) {
         fileDownloadTreeUri = prefs.getString(KEY_FILE_DOWNLOAD_TREE_URI, "") ?: "",
         firstRunGuideSeen = prefs.getBoolean(KEY_FIRST_RUN_GUIDE_SEEN, false),
         fileNameDisplayMode = prefs.getString(KEY_FILE_NAME_DISPLAY_MODE, "ELLIPSIS") ?: "ELLIPSIS",
+        thumbnailInfoMode = prefs.getString(KEY_THUMBNAIL_INFO_MODE, "NONE") ?: "NONE",
         imageSlideshowIntervalSeconds = prefs.getInt(KEY_IMAGE_SLIDESHOW_INTERVAL_SECONDS, 4).coerceIn(1, 60)
     )
 
@@ -125,6 +129,7 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_DARK_THEME, settings.darkTheme)
             .putBoolean(KEY_AUTO_PLAY_NEXT, settings.autoPlayNext)
             .putBoolean(KEY_KEEP_SCREEN_ON_DURING_PLAYBACK, settings.keepScreenOnDuringPlayback)
+            .putBoolean(KEY_SHOW_VIDEO_CONTROLS, settings.showVideoControls)
             .putBoolean(KEY_CACHE_ARTWORK_WIFI, settings.cacheArtworkOnWifi)
             .putBoolean(KEY_REMEMBER_PLAYBACK, settings.rememberPlayback)
             .putBoolean(KEY_SHOW_DIAGNOSTICS, settings.showDiagnostics)
@@ -132,6 +137,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_FILE_DOWNLOAD_TREE_URI, settings.fileDownloadTreeUri)
             .putBoolean(KEY_FIRST_RUN_GUIDE_SEEN, settings.firstRunGuideSeen)
             .putString(KEY_FILE_NAME_DISPLAY_MODE, settings.fileNameDisplayMode)
+            .putString(KEY_THUMBNAIL_INFO_MODE, settings.thumbnailInfoMode)
             .putInt(KEY_IMAGE_SLIDESHOW_INTERVAL_SECONDS, settings.imageSlideshowIntervalSeconds.coerceIn(1, 60))
             .apply()
     }
@@ -187,6 +193,7 @@ class SettingsStore(context: Context) {
         private const val KEY_DARK_THEME = "dark_theme"
         private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
         private const val KEY_KEEP_SCREEN_ON_DURING_PLAYBACK = "keep_screen_on_during_playback"
+        private const val KEY_SHOW_VIDEO_CONTROLS = "show_video_controls"
         private const val KEY_CACHE_ARTWORK_WIFI = "cache_artwork_wifi"
         private const val KEY_REMEMBER_PLAYBACK = "remember_playback"
         private const val KEY_SHOW_DIAGNOSTICS = "show_diagnostics"
@@ -194,6 +201,7 @@ class SettingsStore(context: Context) {
         private const val KEY_FILE_DOWNLOAD_TREE_URI = "file_download_tree_uri"
         private const val KEY_FIRST_RUN_GUIDE_SEEN = "first_run_guide_seen"
         private const val KEY_FILE_NAME_DISPLAY_MODE = "file_name_display_mode"
+        private const val KEY_THUMBNAIL_INFO_MODE = "thumbnail_info_mode"
         private const val KEY_IMAGE_SLIDESHOW_INTERVAL_SECONDS = "image_slideshow_interval_seconds"
         private const val KEY_HISTORY_CLEARED_AT = "history_cleared_at"
         private const val KEY_CACHES_CLEARED_AT = "caches_cleared_at"

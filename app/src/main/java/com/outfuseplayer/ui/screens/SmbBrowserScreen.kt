@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -252,12 +253,27 @@ fun SmbBrowserScreen(
         }
     }
 
+    fun addCurrentDirectory() {
+        val config = activeConfig()
+        scope.launch {
+            busy = true
+            publishSource(config, SourceHealth.SYNCING, "正在递归扫描图片和视频")
+            val result = repository.scanMedia(config)
+            val items = result.value.orEmpty()
+            if (items.isNotEmpty()) onMediaDiscovered(items)
+            status = result.message
+            publishSource(config, if (result.success) SourceHealth.ONLINE else SourceHealth.OFFLINE, result.message)
+            busy = false
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         SmbBrowserTopBar(
             title = initialConfig.name.ifBlank { "SMB" },
             expanded = expanded,
             busy = busy,
             onBack = onBack,
+            onAddCurrentDirectory = ::addCurrentDirectory,
             onRefresh = {
                 scope.launch { loadPath(currentPath) }
             }
@@ -274,44 +290,6 @@ fun SmbBrowserScreen(
                 onNavigate = { currentPath = it },
                 modifier = Modifier.fillMaxWidth()
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(
-                    enabled = !busy && !currentPath.toRemotePath().equals(rootPath, ignoreCase = true),
-                    onClick = ::navigateUp,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(7.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
-                ) {
-                    Text("上一级")
-                }
-                Button(
-                    enabled = !busy,
-                    onClick = {
-                        val config = activeConfig()
-                        scope.launch {
-                            busy = true
-                            publishSource(config, SourceHealth.SYNCING, "正在递归扫描图片和视频")
-                            val result = repository.scanMedia(config)
-                            val items = result.value.orEmpty()
-                            if (items.isNotEmpty()) onMediaDiscovered(items)
-                            status = result.message
-                            publishSource(config, if (result.success) SourceHealth.ONLINE else SourceHealth.OFFLINE, result.message)
-                            busy = false
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(7.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
-                ) {
-                    Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("加入当前目录")
-                }
-            }
-
-            BrowserStatusLine(status = status, busy = busy)
-
             BrowserViewControls(
                 filter = filter,
                 sort = sort,
@@ -452,6 +430,7 @@ private fun SmbBrowserTopBar(
     expanded: Boolean,
     busy: Boolean,
     onBack: () -> Unit,
+    onAddCurrentDirectory: () -> Unit,
     onRefresh: () -> Unit
 ) {
     Row(
@@ -477,33 +456,12 @@ private fun SmbBrowserTopBar(
         if (busy) {
             CircularProgressIndicator(color = PrimaryOrange, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
         } else {
+            IconButton(onClick = onAddCurrentDirectory) {
+                Icon(Icons.Outlined.Sync, contentDescription = "加入当前目录", tint = PrimaryOrange)
+            }
             IconButton(onClick = onRefresh) {
-                Icon(Icons.Outlined.Sync, contentDescription = "刷新", tint = PrimaryOrange)
+                Icon(Icons.Outlined.Refresh, contentDescription = "刷新", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        }
-    }
-}
-
-@Composable
-private fun BrowserStatusLine(status: String, busy: Boolean) {
-    Surface(
-        shape = RoundedCornerShape(7.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (busy) {
-                CircularProgressIndicator(color = PrimaryOrange, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-            } else {
-                Icon(Icons.Outlined.Check, contentDescription = null, tint = PrimaryOrange, modifier = Modifier.size(18.dp))
-            }
-            Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.86f), maxLines = 2)
         }
     }
 }

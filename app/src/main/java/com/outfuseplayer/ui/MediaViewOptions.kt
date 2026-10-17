@@ -47,6 +47,22 @@ enum class FileNameDisplayMode(val label: String) {
     MARQUEE("轮播")
 }
 
+enum class ThumbnailInfoMode(val label: String) {
+    NONE("不显示"),
+    YEAR("年份"),
+    DURATION("时长"),
+    SOURCE("来源"),
+    FILE_TYPE("文件类型")
+}
+
+fun LibraryItem.thumbnailInfo(mode: ThumbnailInfoMode): String? = when (mode) {
+    ThumbnailInfoMode.NONE -> null
+    ThumbnailInfoMode.YEAR -> year?.toString()
+    ThumbnailInfoMode.DURATION -> durationLabel.takeIf { it.isNotBlank() }
+    ThumbnailInfoMode.SOURCE -> sourceName.takeIf { it.isNotBlank() }
+    ThumbnailInfoMode.FILE_TYPE -> fileTypeLabel()
+}
+
 inline fun <reified T : Enum<T>> enumValueOrDefault(name: String, fallback: T): T =
     runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
 
@@ -144,5 +160,4 @@ private val RemoteEntry.mediaTypeName: String
         name.isVideoFileName() || mimeType?.startsWith("video/", ignoreCase = true) == true -> "2-video"
         else -> "3-file"
     }
-
 

@@ -1181,6 +1181,29 @@ private fun RemoteBrowserScreen(
         status = "正在打开：${entry.name}"
     }
 
+    fun addCurrentRemoteDirectory() {
+        if (!currentConfig.type.isWebDavLike()) return
+        scope.launch {
+            busy = true
+            status = "正在递归扫描当前 WebDAV 目录"
+            val result = webDavRepository.scanMedia(
+                config = currentConfig,
+                onProgress = { scanned, pending, found, current ->
+                    withContext(Dispatchers.Main) {
+                        status = "扫描中：$found 个媒体 · $scanned 个目录 · 待扫描 $pending · $current"
+                    }
+                },
+                onBatch = { batch ->
+                    if (batch.isNotEmpty()) {
+                        withContext(Dispatchers.Main) { onMediaDiscovered(batch) }
+                    }
+                }
+            )
+            status = result.message
+            busy = false
+        }
+    }
+
     LaunchedEffect(currentConfig.sourceId, currentConfig.path, currentConfig.token, currentConfig.userId) {
         loadRemotePath(currentConfig)
     }
@@ -1256,6 +1279,14 @@ private fun RemoteBrowserScreen(
                 ) {
                     Text("根目录")
                 }
+                if (currentConfig.type.isWebDavLike()) {
+                    IconButton(
+                        enabled = !busy,
+                        onClick = ::addCurrentRemoteDirectory
+                    ) {
+                        Icon(Icons.Outlined.Sync, contentDescription = "加入当前目录", tint = PrimaryOrange)
+                    }
+                }
                 IconButton(
                     enabled = !busy,
                     onClick = { scope.launch { loadRemotePath(currentConfig) } }
@@ -1270,56 +1301,6 @@ private fun RemoteBrowserScreen(
                 onNavigate = { currentConfig = currentConfig.copy(path = it) },
                 modifier = Modifier.fillMaxWidth()
             )
-        }
-        item {
-            StatusLine(status = status)
-        }
-        if (currentConfig.type.isWebDavLike()) {
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(
-                        enabled = !busy && currentConfig.path.trim('/') != rootPath,
-                        onClick = ::navigateUp,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(7.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
-                    ) {
-                        Text("上一级")
-                    }
-                    Button(
-                        enabled = !busy,
-                        onClick = {
-                            scope.launch {
-                                busy = true
-                                status = "正在递归扫描当前 WebDAV 目录"
-                                val result = webDavRepository.scanMedia(
-                                    config = currentConfig,
-                                    onProgress = { scanned, pending, found, current ->
-                                        withContext(Dispatchers.Main) {
-                                            status = "扫描中：$found 个媒体 · $scanned 个目录 · 待扫描 $pending · $current"
-                                        }
-                                    },
-                                    onBatch = { batch ->
-                                        if (batch.isNotEmpty()) {
-                                            withContext(Dispatchers.Main) { onMediaDiscovered(batch) }
-                                        }
-                                    }
-                                )
-                                status = result.message
-                                busy = false
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(7.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
-                    ) {
-                        Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("加入当前目录")
-                    }
-                }
-            }
         }
         item {
             SourceBrowserControls(
@@ -1638,7 +1619,6 @@ private fun LocalBrowserScreen(
                 modifier = Modifier.fillMaxWidth()
             )
         }
-        item { StatusLine(status = status) }
         item {
             SourceBrowserControls(
                 filter = filter,

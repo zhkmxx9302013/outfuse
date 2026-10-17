@@ -53,6 +53,7 @@ import com.outfuseplayer.model.LibraryItemType
 import com.outfuseplayer.model.MediaSource
 import com.outfuseplayer.model.SourceHealth
 import com.outfuseplayer.ui.FileNameDisplayMode
+import com.outfuseplayer.ui.ThumbnailInfoMode
 import com.outfuseplayer.ui.components.BackdropImage
 import com.outfuseplayer.ui.components.FileNameText
 import com.outfuseplayer.ui.components.FilePreviewThumb
@@ -163,6 +164,7 @@ fun HomeScreen(
     shows: List<LibraryItem>,
     expanded: Boolean,
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
+    thumbnailInfoMode: ThumbnailInfoMode = ThumbnailInfoMode.NONE,
     onItemClick: (LibraryItem) -> Unit,
     onPlay: (LibraryItem) -> Unit,
     onViewAll: (HomeViewAllSection, String?) -> Unit,
@@ -252,6 +254,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 148.dp else 126.dp,
                 series = series,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.CONTINUE_WATCHING, null) }
             )
@@ -264,6 +267,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.PLAYED, null) }
             )
@@ -276,6 +280,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.UNPLAYED, null) }
             )
@@ -288,6 +293,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.RECENT, null) }
             )
@@ -300,6 +306,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.ALL, null) }
             )
@@ -312,6 +319,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.MOVIES, null) }
             )
@@ -324,6 +332,7 @@ fun HomeScreen(
                 posterWidth = if (expanded) 138.dp else 116.dp,
                 series = series,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 action = "查看全部",
                 onActionClick = { onViewAll(HomeViewAllSection.SHOWS, null) }
             )

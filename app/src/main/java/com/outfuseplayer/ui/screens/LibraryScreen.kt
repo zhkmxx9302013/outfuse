@@ -31,13 +31,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.FilterList
-import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Shuffle
-import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.ViewAgenda
 import androidx.compose.material.icons.outlined.ViewComfy
 import androidx.compose.material3.AlertDialog
@@ -83,6 +79,7 @@ import com.outfuseplayer.ui.FileActionRequest
 import com.outfuseplayer.ui.FileNameDisplayMode
 import com.outfuseplayer.ui.MediaLayout
 import com.outfuseplayer.ui.MediaSort
+import com.outfuseplayer.ui.ThumbnailInfoMode
 import com.outfuseplayer.ui.icon
 import com.outfuseplayer.ui.MetadataMatchUiState
 import com.outfuseplayer.ui.components.FileNameText
@@ -143,6 +140,7 @@ fun LibraryScreen(
     collectionSeriesIds: Set<String> = emptySet(),
     itemsStableForBackgroundRead: Boolean = false,
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
+    thumbnailInfoMode: ThumbnailInfoMode = ThumbnailInfoMode.NONE,
     onBack: (() -> Unit)? = null,
     onItemClick: (LibraryItem) -> Unit,
     onPlayQueue: (LibraryItem, List<LibraryItem>, Boolean) -> Unit,
@@ -304,9 +302,6 @@ fun LibraryScreen(
             },
             layout = layout,
             onLayout = { layoutName = it.name },
-            expanded = expanded
-        )
-        LibraryControls(
             expanded = expanded,
             hasVideos = playableVideos.isNotEmpty(),
             onPlaySequential = {
@@ -355,6 +350,7 @@ fun LibraryScreen(
                     selectionMode = selectionMode,
                     selectedIds = selectedIdSet,
                     fileNameMode = fileNameMode,
+                    thumbnailInfoMode = thumbnailInfoMode,
                     onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                     onActionClick = { actionTarget = it },
                     modifier = Modifier.weight(1f)
@@ -377,6 +373,7 @@ fun LibraryScreen(
                 selectionMode = selectionMode,
                 selectedIds = selectedIdSet,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 onItemClick = { item -> if (selectionMode) toggleSelection(item) else onItemClick(item) },
                 onActionClick = { actionTarget = it },
                 modifier = Modifier.fillMaxSize()
@@ -433,6 +430,11 @@ private fun LibraryTopBar(
     metadataState: MetadataMatchUiState?,
     onBack: (() -> Unit)?
 ) {
+    val statsLabel = buildString {
+        append("共 ${stats.total} 项")
+        if (stats.videos > 0) append(" · 视频 ${stats.videos}")
+        if (stats.images > 0) append(" · 图片 ${stats.images}")
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -440,7 +442,11 @@ private fun LibraryTopBar(
             .padding(horizontal = if (expanded) 32.dp else 20.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             if (onBack != null) {
                 IconButton(onClick = onBack) {
                     Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onBackground)
@@ -456,19 +462,18 @@ private fun LibraryTopBar(
                     Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = statsLabel,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
         metadataState?.let { state ->
             MetadataProgressLine(state)
         }
-        Text(
-            text = buildString {
-                append("共 ${stats.total} 项")
-                if (stats.videos > 0) append(" · 视频 ${stats.videos}")
-                if (stats.images > 0) append(" · 图片 ${stats.images}")
-            },
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -477,12 +482,14 @@ private fun OptionDropdown(
     label: String,
     options: List<String>,
     selectedLabel: String,
+    enabled: Boolean = true,
     onSelected: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(
             onClick = { expanded = true },
+            enabled = enabled,
             shape = RoundedCornerShape(7.dp),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
@@ -541,7 +548,17 @@ private fun LibraryOptionRow(
     onSort: (MediaSort) -> Unit,
     layout: MediaLayout,
     onLayout: (MediaLayout) -> Unit,
-    expanded: Boolean
+    expanded: Boolean,
+    hasVideos: Boolean,
+    onPlaySequential: () -> Unit,
+    onPlayShuffle: () -> Unit,
+    onOpenMultiPlayer: (() -> Unit)? = null,
+    selectionMode: Boolean,
+    selectedCount: Int,
+    onToggleSelectionMode: () -> Unit,
+    onCreateSeriesFromSelection: () -> Unit,
+    onRefreshLibrary: (() -> Unit)?,
+    onRefreshMetadata: (() -> Unit)?
 ) {
     var filtersOpen by rememberSaveable { mutableStateOf(false) }
     val selectedSourceName = sources.firstOrNull { it.id == selectedSourceId }?.name
@@ -551,32 +568,111 @@ private fun LibraryOptionRow(
         if (selectedSourceId != null) 1 else 0,
         if (selectedSeriesId != null) 1 else 0
     ).sum()
+    val refreshActions = buildList<Pair<String, () -> Unit>> {
+        onRefreshLibrary?.let { action -> add("刷新媒体库" to action) }
+        onRefreshMetadata?.let { action -> add("刷新元数据" to action) }
+    }
+    val playbackActions = buildList<Pair<String, () -> Unit>> {
+        add("顺序播放" to onPlaySequential)
+        add("随机播放" to onPlayShuffle)
+        onOpenMultiPlayer?.let { action -> add("多窗口播放" to action) }
+    }
+    var selectedPlaybackAction by rememberSaveable { mutableStateOf("随机播放") }
+    val activePlaybackAction = selectedPlaybackAction.takeIf { selected ->
+        playbackActions.any { (label, _) -> label == selected }
+    } ?: playbackActions.first().first
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 6.dp)
-            .padding(horizontal = if (expanded) 32.dp else 20.dp),
+            .padding(horizontal = if (expanded) 32.dp else 20.dp)
+            .padding(bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // Collapsible filters: one compact toggle; expands to the full row.
-        OutlinedButton(
-            onClick = { filtersOpen = !filtersOpen },
-            shape = RoundedCornerShape(7.dp),
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-            border = BorderStroke(1.dp, if (filtersOpen || activeFilterCount > 0) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = if (filtersOpen || activeFilterCount > 0) PrimaryOrange else MaterialTheme.colorScheme.onSurface)
+        LazyRow(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Icon(Icons.Outlined.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(if (activeFilterCount > 0) "筛选($activeFilterCount)" else "筛选")
+            item {
+                OutlinedButton(
+                    onClick = onToggleSelectionMode,
+                    shape = RoundedCornerShape(7.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    border = BorderStroke(1.dp, if (selectionMode) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = if (selectionMode) PrimaryOrange else MaterialTheme.colorScheme.onSurface)
+                ) { Text(if (selectionMode) "取消" else "多选") }
+            }
+            if (selectionMode) {
+                item {
+                    Button(
+                        enabled = selectedCount > 0,
+                        onClick = onCreateSeriesFromSelection,
+                        shape = RoundedCornerShape(7.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                    ) { Text(if (expanded) "新建系列 $selectedCount" else "系列 $selectedCount") }
+                }
+            }
+            item {
+                OutlinedButton(
+                    onClick = { filtersOpen = !filtersOpen },
+                    shape = RoundedCornerShape(7.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    border = BorderStroke(1.dp, if (filtersOpen || activeFilterCount > 0) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = if (filtersOpen || activeFilterCount > 0) PrimaryOrange else MaterialTheme.colorScheme.onSurface)
+                ) {
+                    Icon(Icons.Outlined.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (activeFilterCount > 0) "筛选($activeFilterCount)" else "筛选")
+                }
+            }
+            item {
+                OptionDropdown(
+                    label = "${sort.label}${if (sortAscending) " ↑" else " ↓"}",
+                    options = MediaSort.entries.map { it.label },
+                    selectedLabel = sort.label,
+                    onSelected = { index -> onSort(MediaSort.entries[index]) }
+                )
+            }
+            item {
+                OptionDropdown(
+                    label = "刷新",
+                    options = refreshActions.map { it.first },
+                    selectedLabel = "",
+                    enabled = refreshActions.isNotEmpty(),
+                    onSelected = { index -> refreshActions.getOrNull(index)?.second?.invoke() }
+                )
+            }
+            item {
+                OptionDropdown(
+                    label = activePlaybackAction,
+                    options = playbackActions.map { it.first },
+                    selectedLabel = activePlaybackAction,
+                    enabled = hasVideos,
+                    onSelected = { index ->
+                        playbackActions.getOrNull(index)?.let { (label, _) ->
+                            selectedPlaybackAction = label
+                        }
+                    }
+                )
+            }
+            item {
+                Button(
+                    enabled = hasVideos,
+                    onClick = {
+                        playbackActions.firstOrNull { (label, _) -> label == activePlaybackAction }?.second?.invoke()
+                    },
+                    shape = RoundedCornerShape(7.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
+                ) {
+                    Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("播放")
+                }
+            }
         }
-        OptionDropdown(
-            label = "排序：${sort.label}${if (sortAscending) " ↑" else " ↓"}",
-            options = MediaSort.entries.map { it.label },
-            selectedLabel = sort.label,
-            onSelected = { index -> onSort(MediaSort.entries[index]) }
-        )
         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             MediaLayout.entries.forEach { option ->
                 val active = layout == option
@@ -585,11 +681,7 @@ private fun LibraryOptionRow(
                     modifier = Modifier
                         .size(34.dp)
                         .then(
-                            if (active) {
-                                Modifier.background(PrimaryOrange.copy(alpha = 0.14f), RoundedCornerShape(7.dp))
-                            } else {
-                                Modifier
-                            }
+                            if (active) Modifier.background(PrimaryOrange.copy(alpha = 0.14f), RoundedCornerShape(7.dp)) else Modifier
                         )
                 ) {
                     Icon(
@@ -737,116 +829,6 @@ private fun FileActionDialog(
 }
 
 @Composable
-private fun LibraryControls(
-    expanded: Boolean,
-    hasVideos: Boolean,
-    onPlaySequential: () -> Unit,
-    onPlayShuffle: () -> Unit,
-    onOpenMultiPlayer: (() -> Unit)? = null,
-    selectionMode: Boolean,
-    selectedCount: Int,
-    onToggleSelectionMode: () -> Unit,
-    onCreateSeriesFromSelection: () -> Unit,
-    onRefreshLibrary: (() -> Unit)?,
-    onRefreshMetadata: (() -> Unit)?
-) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = if (expanded) 32.dp else 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.padding(bottom = 10.dp)
-    ) {
-        item {
-            OutlinedButton(
-                onClick = onToggleSelectionMode,
-                shape = RoundedCornerShape(7.dp),
-                border = BorderStroke(1.dp, if (selectionMode) PrimaryOrange.copy(alpha = 0.62f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (selectionMode) PrimaryOrange else MaterialTheme.colorScheme.onSurface)
-            ) {
-                Text(if (selectionMode) "取消" else "多选")
-            }
-        }
-        if (selectionMode) {
-            item {
-                Button(
-                    enabled = selectedCount > 0,
-                    onClick = onCreateSeriesFromSelection,
-                    shape = RoundedCornerShape(7.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
-                ) {
-                    Text(if (expanded) "新建系列 $selectedCount" else "系列 $selectedCount")
-                }
-            }
-        }
-        item {
-            OutlinedButton(
-                enabled = onRefreshLibrary != null,
-                onClick = { onRefreshLibrary?.invoke() },
-                shape = RoundedCornerShape(7.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
-            ) {
-                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(if (expanded) "刷新媒体库" else "刷新")
-            }
-        }
-        item {
-            OutlinedButton(
-                enabled = onRefreshMetadata != null,
-                onClick = { onRefreshMetadata?.invoke() },
-                shape = RoundedCornerShape(7.dp),
-                border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.62f)),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryOrange)
-            ) {
-                Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(if (expanded) "刷新元数据" else "元数据")
-            }
-        }
-        item {
-            Button(
-                enabled = hasVideos,
-                onClick = onPlaySequential,
-                shape = RoundedCornerShape(7.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = PrimaryOrange)
-            ) {
-                Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(if (expanded) "顺序播放" else "顺序")
-            }
-        }
-        item {
-            OutlinedButton(
-                enabled = hasVideos,
-                onClick = onPlayShuffle,
-                shape = RoundedCornerShape(7.dp),
-                border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.62f)),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryOrange)
-            ) {
-                Icon(Icons.Outlined.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(if (expanded) "随机播放" else "随机")
-            }
-        }
-        if (onOpenMultiPlayer != null) {
-            item {
-                OutlinedButton(
-                    enabled = hasVideos,
-                    onClick = onOpenMultiPlayer,
-                    shape = RoundedCornerShape(7.dp),
-                    border = BorderStroke(1.dp, PrimaryOrange.copy(alpha = 0.62f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryOrange)
-                ) {
-                    Icon(Icons.Outlined.GridView, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (expanded) "多窗口播放" else "多窗口")
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun LibraryGrid(
     items: List<LibraryItem>,
     series: List<UserSeries>,
@@ -856,6 +838,7 @@ private fun LibraryGrid(
     selectionMode: Boolean,
     selectedIds: Set<String>,
     fileNameMode: FileNameDisplayMode,
+    thumbnailInfoMode: ThumbnailInfoMode,
     onItemClick: (LibraryItem) -> Unit,
     onActionClick: (LibraryItem) -> Unit,
     modifier: Modifier = Modifier
@@ -887,7 +870,8 @@ private fun LibraryGrid(
                     onClick = { onItemClick(item) },
                     width = if (layout == MediaLayout.LARGE) 152.dp else 112.dp,
                     modifier = Modifier.fillMaxWidth(),
-                    fileNameMode = fileNameMode
+                    fileNameMode = fileNameMode,
+                    thumbnailInfoMode = thumbnailInfoMode
                 )
                 if (selectionMode) {
                     SelectionMark(

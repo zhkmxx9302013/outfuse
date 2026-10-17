@@ -69,6 +69,7 @@ import com.outfuseplayer.data.MediaOutputRepository
 import com.outfuseplayer.data.SettingsStore
 import com.outfuseplayer.data.ThumbnailRepository
 import com.outfuseplayer.ui.FileNameDisplayMode
+import com.outfuseplayer.ui.ThumbnailInfoMode
 import com.outfuseplayer.ui.enumValueOrDefault
 import com.outfuseplayer.ui.i18n.LanguageChoice
 import com.outfuseplayer.ui.i18n.LocalUiStrings
@@ -228,6 +229,19 @@ fun SettingsScreen(
                         )
                     }
                 )
+                OptionSetting(
+                    title = "缩略图辅助信息",
+                    subtitle = "显示在媒体库和首页缩略图的文件名下方",
+                    options = ThumbnailInfoMode.entries.map { it.label },
+                    selected = enumValueOrDefault(currentSettings.thumbnailInfoMode, ThumbnailInfoMode.NONE).label,
+                    onSelected = { label ->
+                        val mode = ThumbnailInfoMode.entries.firstOrNull { it.label == label } ?: ThumbnailInfoMode.NONE
+                        update(
+                            currentSettings.copy(thumbnailInfoMode = mode.name),
+                            "缩略图辅助信息已设为${mode.label}"
+                        )
+                    }
+                )
             }
         }
         item {
@@ -256,6 +270,16 @@ fun SettingsScreen(
                         update(
                             currentSettings.copy(keepScreenOnDuringPlayback = it),
                             if (it) "播放视频时屏幕不会自动熄灭" else "播放时将跟随系统息屏设置"
+                        )
+                    }
+                )
+                ToggleSetting(
+                    title = "显示底部视频控制条",
+                    checked = currentSettings.showVideoControls,
+                    onCheckedChange = {
+                        update(
+                            currentSettings.copy(showVideoControls = it),
+                            if (it) "播放时会显示底部控制按键" else "已隐藏底部视频控制按键"
                         )
                     }
                 )
@@ -1039,4 +1063,3 @@ private fun TextValueSetting(
         )
     }
 }
-

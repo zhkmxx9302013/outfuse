@@ -33,7 +33,12 @@ import com.outfuseplayer.data.remote.WebDavRepository
 import com.outfuseplayer.data.remote.WebDavUriScheme
 import com.outfuseplayer.model.LibraryItem
 import com.outfuseplayer.model.LibraryItemType
+import com.outfuseplayer.playback.SmbStreamServer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -46,6 +51,8 @@ object ThumbnailRepository {
     private const val DISK_CACHE_MAX_BYTES = 160L * 1024 * 1024
     private const val DISK_CACHE_SWEEP_EVERY = 60
     private val limiter = Semaphore(2)
+    private val thumbnailScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val inFlight = mutableMapOf<String, Deferred<Bitmap?>>()
     private val cache = object : LruCache<String, Bitmap>(24 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
     }
@@ -270,6 +277,23 @@ object ThumbnailRepository {
             return@withContext fromDisk
         }
 
+        val applicationContext = context?.applicationContext
+        val request = synchronized(inFlight) {
+            inFlight[key] ?: thumbnailScope.async {
+                loadThumbnail(applicationContext, item, key)
+            }.also { created ->
+                inFlight[key] = created
+                created.invokeOnCompletion {
+                    synchronized(inFlight) {
+                        if (inFlight[key] === created) inFlight.remove(key)
+                    }
+                }
+            }
+        }
+        request.await()
+    }
+
+    private suspend fun loadThumbnail(context: Context?, item: LibraryItem, key: String): Bitmap? =
         limiter.withPermit {
             synchronized(cache) {
                 cache.get(key)?.let { return@withPermit it }
@@ -295,13 +319,10 @@ object ThumbnailRepository {
             // Only real remote thumbnails go to disk (format covers are cheap).
             if (loaded != null) {
                 writeDiskCache(item, loaded)
-            }
-            if (bitmap != null) {
-                synchronized(cache) { cache.put(key, bitmap) }
+                synchronized(cache) { cache.put(key, loaded) }
             }
             bitmap
         }
-    }
 
     private fun loadContentImage(context: Context, uri: Uri, maxEdge: Int): Bitmap? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -337,12 +358,24 @@ object ThumbnailRepository {
             val bytes = SmbRepository().readBytesBlocking(config, path, REMOTE_THUMBNAIL_IMAGE_BYTES)
             bytes?.decodeSampledBitmap(MAX_EDGE)
         } else {
-            runCatching {
+            val directFrame = runCatching {
                 SmbFrameDataSource(config, path).use { dataSource ->
                     MediaMetadataRetriever().use { retriever ->
                         retriever.setDataSource(dataSource)
                         retriever.extractBestFrame()
                     }
+                }
+            }.getOrNull()
+            directFrame ?: runCatching {
+                val server = SmbStreamServer(config, path)
+                try {
+                    server.start()
+                    MediaMetadataRetriever().use { retriever ->
+                        retriever.setDataSource(server.url(), emptyMap())
+                        retriever.extractBestFrame()
+                    }
+                } finally {
+                    server.stop()
                 }
             }.getOrNull()
         }
@@ -588,5 +621,4 @@ private class SmbFrameDataSource(
         }
     }
 }
-
 

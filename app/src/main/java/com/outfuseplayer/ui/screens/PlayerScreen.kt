@@ -353,6 +353,7 @@ fun PlayerScreen(
     startShuffle: Boolean = false,
     autoPlayNextEnabled: Boolean = true,
     keepScreenOnDuringPlayback: Boolean = true,
+    showVideoControls: Boolean = true,
     onShowFileLocation: (LibraryItem) -> Unit = {},
     onRemoveFromLibrary: (LibraryItem) -> Unit = {},
     onAutoRemoveIfMissing: (LibraryItem) -> Unit = {},
@@ -395,6 +396,7 @@ fun PlayerScreen(
             playlist = playlist,
             expanded = expanded,
             startShuffle = startShuffle,
+            showVideoControls = showVideoControls,
             onShowFileLocation = onShowFileLocation,
             onFallbackToExo = { forceExoFallback = true },
             onRemoveFromLibrary = onRemoveFromLibrary,
@@ -416,6 +418,7 @@ fun PlayerScreen(
             playlist = playlist,
             expanded = expanded,
             startShuffle = startShuffle,
+            showVideoControls = showVideoControls,
             onShowFileLocation = onShowFileLocation,
             onFallbackToIjk = { forceIjkFallback = true },
             onFallbackToExo = { forceExoFallback = true },
@@ -438,6 +441,7 @@ fun PlayerScreen(
             playlist = playlist,
             expanded = expanded,
             startShuffle = startShuffle,
+            showVideoControls = showVideoControls,
             onShowFileLocation = onShowFileLocation,
             onFallbackToIjk = { forceIjkFallback = true },
             onFallbackToExo = { forceExoFallback = true },
@@ -868,40 +872,42 @@ fun PlayerScreen(
                         showFavoritesSheet = true
                     }
                 )
-                PlayerBottomControls(
-                    item = currentItem,
-                    player = player,
-                    isPlaying = isPlaying,
-                    shuffleEnabled = shuffleEnabled,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    bufferedMs = bufferedMs,
-                    onTogglePlay = {
-                        if (player.isPlaying) player.pause() else player.play()
-                    },
-                    onToggleShuffle = {
-                        shuffleEnabled = !shuffleEnabled
-                        player.shuffleModeEnabled = !player.shuffleModeEnabled
-                    },
-                    speed = playbackSpeed,
-                    onCycleSpeed = {
-                        val speeds = listOf(1f, 1.25f, 1.5f, 2f)
-                        val index = speeds.indexOfFirst { it == playbackSpeed }.takeIf { it >= 0 } ?: 0
-                        val next = speeds[(index + 1) % speeds.size]
-                        playbackSpeed = next
-                        player.setPlaybackSpeed(next)
-                    },
-                    onToggleFit = {
-                        fitMode = if (fitMode == PlayerFitMode.CROP) PlayerFitMode.FIT else PlayerFitMode.CROP
-                    },
-                    onOpenMultiPlayer = if (expanded) {
-                        { onOpenMultiPlayer(multiPlaylist) }
-                    } else {
-                        null
-                    },
-                    expanded = expanded,
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
+                if (showVideoControls) {
+                    PlayerBottomControls(
+                        item = currentItem,
+                        player = player,
+                        isPlaying = isPlaying,
+                        shuffleEnabled = shuffleEnabled,
+                        positionMs = positionMs,
+                        durationMs = durationMs,
+                        bufferedMs = bufferedMs,
+                        onTogglePlay = {
+                            if (player.isPlaying) player.pause() else player.play()
+                        },
+                        onToggleShuffle = {
+                            shuffleEnabled = !shuffleEnabled
+                            player.shuffleModeEnabled = !player.shuffleModeEnabled
+                        },
+                        speed = playbackSpeed,
+                        onCycleSpeed = {
+                            val speeds = listOf(1f, 1.25f, 1.5f, 2f)
+                            val index = speeds.indexOfFirst { it == playbackSpeed }.takeIf { it >= 0 } ?: 0
+                            val next = speeds[(index + 1) % speeds.size]
+                            playbackSpeed = next
+                            player.setPlaybackSpeed(next)
+                        },
+                        onToggleFit = {
+                            fitMode = if (fitMode == PlayerFitMode.CROP) PlayerFitMode.FIT else PlayerFitMode.CROP
+                        },
+                        onOpenMultiPlayer = if (expanded) {
+                            { onOpenMultiPlayer(multiPlaylist) }
+                        } else {
+                            null
+                        },
+                        expanded = expanded,
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
                 if (playlistVisible && !expanded) {
                     QuickSwitchStrip(
                         playlist = playbackItems,
@@ -1333,6 +1339,7 @@ private fun SmbLegacyPlaybackScreen(
     playlist: List<LibraryItem>,
     expanded: Boolean,
     startShuffle: Boolean,
+    showVideoControls: Boolean,
     onShowFileLocation: (LibraryItem) -> Unit,
     onFallbackToIjk: () -> Unit,
     onFallbackToExo: () -> Unit = {},
@@ -1351,6 +1358,7 @@ private fun SmbLegacyPlaybackScreen(
         playlist = playlist,
         expanded = expanded,
         startShuffle = startShuffle,
+        showVideoControls = showVideoControls,
         useSmbLoopback = true,
         onShowFileLocation = onShowFileLocation,
         onFallbackToIjk = onFallbackToIjk,
@@ -1492,6 +1500,7 @@ private fun VlcFallbackPlayerScreen(
     playlist: List<LibraryItem>,
     expanded: Boolean,
     startShuffle: Boolean,
+    showVideoControls: Boolean,
     useSmbLoopback: Boolean = false,
     onShowFileLocation: (LibraryItem) -> Unit,
     onFallbackToIjk: () -> Unit,
@@ -2067,26 +2076,28 @@ private fun VlcFallbackPlayerScreen(
                         showFavoritesSheet = true
                     }
                 )
-                IjkBottomControls(
-                    item = currentItem,
-                    title = currentItem.title,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    hasPrevious = currentIndex > 0,
-                    hasNext = currentIndex < playbackItems.lastIndex,
-                    onTogglePlay = ::togglePlayback,
-                    onSeekPreview = { controlsVisible = true },
-                    onSeekCommit = { target ->
-                        val next = target.coerceIn(0L, durationMs.coerceAtLeast(1L))
-                        player.time = next
-                        positionMs = next
-                    },
-                    onPrevious = { playIndex(currentIndex - 1) },
-                    onNext = { playIndex(currentIndex + 1) },
-                    expanded = expanded,
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
+                if (showVideoControls) {
+                    IjkBottomControls(
+                        item = currentItem,
+                        title = currentItem.title,
+                        isPlaying = isPlaying,
+                        positionMs = positionMs,
+                        durationMs = durationMs,
+                        hasPrevious = currentIndex > 0,
+                        hasNext = currentIndex < playbackItems.lastIndex,
+                        onTogglePlay = ::togglePlayback,
+                        onSeekPreview = { controlsVisible = true },
+                        onSeekCommit = { target ->
+                            val next = target.coerceIn(0L, durationMs.coerceAtLeast(1L))
+                            player.time = next
+                            positionMs = next
+                        },
+                        onPrevious = { playIndex(currentIndex - 1) },
+                        onNext = { playIndex(currentIndex + 1) },
+                        expanded = expanded,
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
             }
         }
         AnimatedVisibility(visible = !locked && moreVisible, modifier = Modifier.fillMaxSize()) {
@@ -2284,6 +2295,7 @@ private fun IjkFallbackPlayerScreen(
     playlist: List<LibraryItem>,
     expanded: Boolean,
     startShuffle: Boolean,
+    showVideoControls: Boolean,
     onShowFileLocation: (LibraryItem) -> Unit,
     onFallbackToExo: () -> Unit = {},
     onRemoveFromLibrary: (LibraryItem) -> Unit = {},
@@ -2698,28 +2710,30 @@ private fun IjkFallbackPlayerScreen(
                         showFavoritesSheet = true
                     }
                 )
-                IjkBottomControls(
-                    item = currentItem,
-                    title = currentItem.title,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    hasPrevious = currentIndex > 0,
-                    hasNext = currentIndex < playbackItems.lastIndex,
-                    onTogglePlay = ::togglePlayback,
-                    onSeekPreview = { controlsVisible = true },
-                    onSeekCommit = { target ->
-                        if (isPrepared) {
-                            val next = target.coerceIn(0L, durationMs.coerceAtLeast(1L))
-                            player.seekTo(next)
-                            positionMs = next
-                        }
-                    },
-                    onPrevious = { playIndex(currentIndex - 1) },
-                    onNext = { playIndex(currentIndex + 1) },
-                    expanded = expanded,
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
+                if (showVideoControls) {
+                    IjkBottomControls(
+                        item = currentItem,
+                        title = currentItem.title,
+                        isPlaying = isPlaying,
+                        positionMs = positionMs,
+                        durationMs = durationMs,
+                        hasPrevious = currentIndex > 0,
+                        hasNext = currentIndex < playbackItems.lastIndex,
+                        onTogglePlay = ::togglePlayback,
+                        onSeekPreview = { controlsVisible = true },
+                        onSeekCommit = { target ->
+                            if (isPrepared) {
+                                val next = target.coerceIn(0L, durationMs.coerceAtLeast(1L))
+                                player.seekTo(next)
+                                positionMs = next
+                            }
+                        },
+                        onPrevious = { playIndex(currentIndex - 1) },
+                        onNext = { playIndex(currentIndex + 1) },
+                        expanded = expanded,
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
             }
         }
         AnimatedVisibility(visible = !locked && moreVisible, modifier = Modifier.fillMaxSize()) {

@@ -1555,6 +1555,7 @@ private fun OutfuseAppContent(
                 startShuffle = startShuffle,
                 autoPlayNextEnabled = appSettings.autoPlayNext,
                 keepScreenOnDuringPlayback = appSettings.keepScreenOnDuringPlayback,
+                showVideoControls = appSettings.showVideoControls,
                 onShowFileLocation = ::showFileLocation,
                 onRemoveFromLibrary = { item ->
                     removeItemFromLibrary(item)
@@ -1859,6 +1860,7 @@ private fun AppContent(
     onOpenSourceMedia: (LibraryItem, List<LibraryItem>) -> Unit,
     onMediaScanCompleted: (String, List<LibraryItem>) -> Unit
 ) {
+    val thumbnailInfoMode = enumValueOrDefault(appSettings.thumbnailInfoMode, ThumbnailInfoMode.NONE)
     if (detailItem != null) {
         DetailScreen(
             item = detailItem,
@@ -1892,6 +1894,7 @@ private fun AppContent(
                     mediaSources = mediaSources,
                     metadataState = metadataState,
                     fileNameMode = fileNameMode,
+                    thumbnailInfoMode = thumbnailInfoMode,
                     expanded = expanded,
                     onBack = onCloseHomeViewAll,
                     onItemClick = onOpenDetail,
@@ -1970,6 +1973,7 @@ private fun AppContent(
                 shows = homeShows,
                 expanded = expanded,
                 fileNameMode = fileNameMode,
+                thumbnailInfoMode = thumbnailInfoMode,
                 onItemClick = onOpenDetail,
                 onPlay = onPlay,
                 onViewAll = onHomeViewAll,
@@ -1984,6 +1988,7 @@ private fun AppContent(
             metadataState = metadataState,
             expanded = expanded,
             fileNameMode = fileNameMode,
+            thumbnailInfoMode = thumbnailInfoMode,
             onItemClick = onOpenDetail,
             onPlayQueue = onPlayQueue,
             onOpenMultiPlayer = if (expanded) {
@@ -2041,6 +2046,7 @@ private fun HomeViewAllRoute(
     mediaSources: List<com.outfuseplayer.model.MediaSource>,
     metadataState: MetadataMatchUiState?,
     fileNameMode: FileNameDisplayMode,
+    thumbnailInfoMode: ThumbnailInfoMode,
     expanded: Boolean,
     onBack: () -> Unit,
     onItemClick: (LibraryItem) -> Unit,
@@ -2095,6 +2101,7 @@ private fun HomeViewAllRoute(
             subtitle = "首页集合 · 可排序、筛选、随机播放",
             itemsStableForBackgroundRead = true,
             fileNameMode = fileNameMode,
+            thumbnailInfoMode = thumbnailInfoMode,
             onBack = onBack,
             onItemClick = onItemClick,
             onPlayQueue = onPlayQueue,
