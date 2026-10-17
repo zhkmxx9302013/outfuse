@@ -313,59 +313,87 @@ fun PosterCard(
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     seriesLabels: List<String> = emptyList()
 ) {
-    Column(
+    val shape = RoundedCornerShape(18.dp)
+    Card(
         modifier = modifier
             .width(width)
-            .clickable(onClick = onClick)
+            .clickable(onClick = onClick),
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
     ) {
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.68f)
+                .clip(shape)
         ) {
+            if (item.posterUrl == null && item.itemType in setOf(LibraryItemType.VIDEO_FILE, LibraryItemType.IMAGE)) {
+                FilePreviewThumb(item = item, modifier = Modifier.fillMaxSize())
+            } else {
+                PosterImage(
+                    url = item.posterUrl,
+                    contentDescription = item.title,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.68f)
-            ) {
-                if (item.posterUrl == null && item.itemType in setOf(LibraryItemType.VIDEO_FILE, LibraryItemType.IMAGE)) {
-                    FilePreviewThumb(item = item, modifier = Modifier.fillMaxSize())
-                } else {
-                    PosterImage(
-                        url = item.posterUrl,
-                        contentDescription = item.title,
-                        modifier = Modifier.fillMaxSize()
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.White.copy(alpha = 0.06f),
+                            0.48f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.78f)
+                        )
                     )
-                }
-                if (showProgress && item.progress > 0f) {
-                    LinearProgressIndicator(
-                        progress = { item.progress.coerceIn(0f, 1f) },
-                        color = PrimaryOrange,
-                        trackColor = Color.White.copy(alpha = 0.18f),
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth()
-                            .height(3.dp)
+            )
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(9.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF171A20).copy(alpha = 0.64f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+                shadowElevation = 6.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    FileNameText(
+                        text = item.title,
+                        mode = fileNameMode,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        foldedLines = 2,
+                        expandedLines = 3
+                    )
+                    Text(
+                        text = seriesLabels.firstOrNull()
+                            ?: item.year?.toString()
+                            ?: item.durationLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.74f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
+            if (showProgress && item.progress > 0f) {
+                LinearProgressIndicator(
+                    progress = { item.progress.coerceIn(0f, 1f) },
+                    color = PrimaryOrange,
+                    trackColor = Color.White.copy(alpha = 0.18f),
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .height(3.dp)
+                )
+            }
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        FileNameText(
-            text = item.title,
-            mode = fileNameMode,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            foldedLines = 1,
-            expandedLines = 3
-        )
-        Text(
-            text = item.year?.toString() ?: item.durationLabel,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 

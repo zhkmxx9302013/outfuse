@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.36 - 2026-10-16
+## 0.36 - 2026-10-17
 
 ### 中文说明
 
@@ -13,6 +13,8 @@
 - WebDAV 来源浏览功能与 SMB 对齐：支持刷新、上一级、当前目录递归加入媒体库、筛选/排序/布局、文件操作与目录层级导航。
 - 重做来源目录浏览：返回手势/系统返回键优先回到上一级目录；左上角独立 Home 简化按钮返回来源配置首页；新增可点击面包屑，可直接跳到任意父级。
 - 优化大缩略图模式：平板每行 3 个、紧凑模式每行 2 个；文件名和信息浮于缩略图底部，卡片增加圆角、半透明毛玻璃感、描边与阴影。
+- 修复从首页或媒体库“显示文件位置”时来源根路径与目标父目录混用的问题：现在会进入文件的实际目录，面包屑显示完整相对路径，并可继续逐级向上返回来源根目录。
+- 首页和媒体库缩略图与来源浏览视觉统一：文件名及辅助信息改为缩略图内半透明浮层，强化圆角、玻璃高光描边和悬浮阴影。
 
 ### English Notes
 
@@ -23,6 +25,8 @@
 - Added a “keep screen on during playback” setting, enabled by default.
 - Fixed WebDAV/123Pan `405 Method Not Allowed` compatibility and brought WebDAV browsing controls in line with SMB.
 - Added hierarchy-first back navigation, a dedicated source-home icon, clickable breadcrumbs, and larger glass-style thumbnail cards with overlaid metadata.
+- Fixed “Show file location” from Home/Library so it opens the real parent directory without treating that directory as the source root.
+- Unified Home and Library thumbnails with the source browser's translucent metadata panel, rounded glass border, and elevated shadow treatment.
 
 ## 0.35 - 2026-10-09
 

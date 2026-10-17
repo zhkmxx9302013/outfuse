@@ -340,6 +340,8 @@ fun SourceScreen(
     val emptyConfig = remember { SmbConfig(name = "", server = "", share = "") }
     var browserConfig by rememberSaveable(stateSaver = NullableSmbConfigSaver) { mutableStateOf<SmbConfig?>(null) }
     var remoteBrowserConfig by rememberSaveable(stateSaver = NullableRemoteSourceConfigSaver) { mutableStateOf<RemoteSourceConfig?>(null) }
+    var smbInitialBrowsePath by rememberSaveable { mutableStateOf<String?>(null) }
+    var remoteInitialBrowsePath by rememberSaveable { mutableStateOf<String?>(null) }
     var smbHighlightPath by rememberSaveable { mutableStateOf<String?>(null) }
     var remoteHighlightPath by rememberSaveable { mutableStateOf<String?>(null) }
     var localHighlightPath by rememberSaveable { mutableStateOf<String?>(null) }
@@ -533,6 +535,7 @@ fun SourceScreen(
             SourceType.SMB -> {
                 configForSource(source)?.let {
                     browserPublishSource = true
+                    smbInitialBrowsePath = null
                     smbHighlightPath = null
                     remoteHighlightPath = null
                     localHighlightPath = null
@@ -541,6 +544,7 @@ fun SourceScreen(
             }
             else -> {
                 remoteConfigForSource(source)?.let {
+                    remoteInitialBrowsePath = null
                     smbHighlightPath = null
                     remoteHighlightPath = null
                     localHighlightPath = null
@@ -593,7 +597,8 @@ fun SourceScreen(
                     remoteHighlightPath = null
                     localHighlightPath = null
                     browserPublishSource = true
-                    browserConfig = config.copy(path = item.path.parentSmbPath())
+                    smbInitialBrowsePath = item.path.parentSmbPath()
+                    browserConfig = config
                     onRevealHandled()
                 }
             }
@@ -602,7 +607,8 @@ fun SourceScreen(
                     remoteHighlightPath = item.path.trim('/')
                     localHighlightPath = null
                     smbHighlightPath = null
-                    remoteBrowserConfig = config.copy(path = item.path.parentRemotePath())
+                    remoteInitialBrowsePath = item.path.parentRemotePath()
+                    remoteBrowserConfig = config
                     onRevealHandled()
                 }
             }
@@ -611,7 +617,8 @@ fun SourceScreen(
                     remoteHighlightPath = item.path.trim('/')
                     localHighlightPath = null
                     smbHighlightPath = null
-                    remoteBrowserConfig = config.copy(path = item.path.parentRemotePath())
+                    remoteInitialBrowsePath = item.path.parentRemotePath()
+                    remoteBrowserConfig = config
                     onRevealHandled()
                 }
             }
@@ -620,6 +627,7 @@ fun SourceScreen(
                     remoteHighlightPath = item.path.trim('/')
                     localHighlightPath = null
                     smbHighlightPath = null
+                    remoteInitialBrowsePath = null
                     remoteBrowserConfig = config
                     onRevealHandled()
                 }
@@ -629,6 +637,7 @@ fun SourceScreen(
                     remoteHighlightPath = item.path.trim('/')
                     localHighlightPath = null
                     smbHighlightPath = null
+                    remoteInitialBrowsePath = null
                     remoteBrowserConfig = config
                     onRevealHandled()
                 }
@@ -653,6 +662,7 @@ fun SourceScreen(
             repository = repository,
             expanded = expanded,
             publishSourceStatus = browserPublishSource,
+            initialBrowsePath = smbInitialBrowsePath,
             highlightPath = smbHighlightPath,
             fileNameMode = fileNameMode,
             isEntryInLibrary = isEntryInLibrary,
@@ -668,10 +678,11 @@ fun SourceScreen(
     remoteBrowserConfig?.let { config ->
         RemoteBrowserScreen(
             initialConfig = config,
-                webDavRepository = webDavRepository,
-                jellyfinRepository = jellyfinRepository,
-                cloudDriveRepository = cloudDriveRepository,
+            webDavRepository = webDavRepository,
+            jellyfinRepository = jellyfinRepository,
+            cloudDriveRepository = cloudDriveRepository,
             expanded = expanded,
+            initialBrowsePath = remoteInitialBrowsePath,
             highlightPath = remoteHighlightPath,
             fileNameMode = fileNameMode,
             isEntryInLibrary = isEntryInLibrary,
@@ -1069,6 +1080,7 @@ private fun RemoteBrowserScreen(
     jellyfinRepository: JellyfinRepository,
     cloudDriveRepository: CloudDriveRepository,
     expanded: Boolean,
+    initialBrowsePath: String? = null,
     highlightPath: String? = null,
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     isEntryInLibrary: (String, String) -> Boolean = { _, _ -> false },
@@ -1080,8 +1092,17 @@ private fun RemoteBrowserScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val rootPath = remember(initialConfig.sourceId, initialConfig.path) { initialConfig.path.trim('/') }
+    val revealStartPath = remember(rootPath, initialBrowsePath) {
+        initialBrowsePath?.trim('/')?.let { candidate ->
+            when {
+                rootPath.isBlank() -> candidate
+                candidate == rootPath || candidate.startsWith("$rootPath/") -> candidate
+                else -> rootPath
+            }
+        }
+    }
     val viewStateStore = remember { SourceBrowserViewStateStore(context) }
-    val savedViewState = remember(initialConfig.sourceId, rootPath, highlightPath) {
+    val savedViewState = remember(initialConfig.sourceId, rootPath, revealStartPath, highlightPath) {
         val persisted = viewStateStore.load(
             sourceId = initialConfig.sourceId,
             defaultSortName = MediaSort.NAME.name,
@@ -1090,13 +1111,15 @@ private fun RemoteBrowserScreen(
             defaultFilterName = MediaEntryFilter.ALL.name,
             defaultPath = rootPath
         )
-        if (highlightPath != null) {
-            persisted.copy(currentPath = rootPath)
+        if (highlightPath != null && revealStartPath != null) {
+            persisted.copy(currentPath = revealStartPath)
         } else {
             persisted.copy(currentPath = persisted.currentPath.ifBlank { rootPath })
         }
     }
-    var currentConfig by remember(initialConfig.sourceId, rootPath, highlightPath) { mutableStateOf(initialConfig.copy(path = savedViewState.currentPath.trim('/'))) }
+    var currentConfig by remember(initialConfig.sourceId, rootPath, revealStartPath, highlightPath) {
+        mutableStateOf(initialConfig.copy(path = savedViewState.currentPath.trim('/')))
+    }
     var entries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("正在打开远程目录...") }

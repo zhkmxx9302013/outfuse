@@ -112,6 +112,7 @@ fun SmbBrowserScreen(
     repository: SmbRepository,
     expanded: Boolean,
     publishSourceStatus: Boolean = true,
+    initialBrowsePath: String? = null,
     highlightPath: String? = null,
     fileNameMode: FileNameDisplayMode = FileNameDisplayMode.ELLIPSIS,
     isEntryInLibrary: (String, String) -> Boolean = { _, _ -> false },
@@ -124,22 +125,32 @@ fun SmbBrowserScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val viewStateStore = remember { SourceBrowserViewStateStore(context) }
-    val savedViewState = remember(initialConfig.sourceId, initialConfig.path, highlightPath) {
+    val rootPath = remember(initialConfig.sourceId, initialConfig.path) { initialConfig.path.toRemotePath() }
+    val revealStartPath = remember(rootPath, initialBrowsePath) {
+        initialBrowsePath?.toRemotePath()?.let { candidate ->
+            when {
+                rootPath.isBlank() -> candidate
+                candidate.equals(rootPath, ignoreCase = true) || candidate.startsWith("$rootPath\\", ignoreCase = true) -> candidate
+                else -> rootPath
+            }
+        }
+    }
+    val savedViewState = remember(initialConfig.sourceId, rootPath, revealStartPath, highlightPath) {
         val persisted = viewStateStore.load(
             sourceId = initialConfig.sourceId,
             defaultSortName = MediaSort.NAME.name,
             defaultSortAscending = true,
             defaultLayoutName = MediaLayout.LIST.name,
             defaultFilterName = MediaEntryFilter.ALL.name,
-            defaultPath = initialConfig.path
+            defaultPath = rootPath
         )
-        if (highlightPath != null) {
-            persisted.copy(currentPath = initialConfig.path)
+        if (highlightPath != null && revealStartPath != null) {
+            persisted.copy(currentPath = revealStartPath)
         } else {
-            persisted.copy(currentPath = persisted.currentPath.ifBlank { initialConfig.path })
+            persisted.copy(currentPath = persisted.currentPath.ifBlank { rootPath })
         }
     }
-    var currentPath by rememberSaveable(initialConfig.sourceId, initialConfig.path, highlightPath) { mutableStateOf(savedViewState.currentPath) }
+    var currentPath by rememberSaveable(initialConfig.sourceId, rootPath, revealStartPath, highlightPath) { mutableStateOf(savedViewState.currentPath) }
     var entries by remember { mutableStateOf<List<SmbEntry>>(emptyList()) }
     var status by rememberSaveable(initialConfig.sourceId) { mutableStateOf("正在打开目录") }
     var busy by remember { mutableStateOf(false) }
@@ -148,7 +159,6 @@ fun SmbBrowserScreen(
     var layoutName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.layoutName) }
     var filterName by rememberSaveable(initialConfig.sourceId) { mutableStateOf(savedViewState.filterName) }
     var actionEntry by remember { mutableStateOf<SmbEntry?>(null) }
-    val rootPath = remember(initialConfig.sourceId, initialConfig.path) { initialConfig.path.toRemotePath() }
     val sort = enumValueOrDefault(sortName, MediaSort.NAME)
     val layout = enumValueOrDefault(layoutName, MediaLayout.LIST)
     val filter = enumValueOrDefault(filterName, MediaEntryFilter.ALL)
